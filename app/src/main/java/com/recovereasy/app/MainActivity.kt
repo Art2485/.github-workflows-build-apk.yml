@@ -61,6 +61,12 @@ class MainActivity : AppCompatActivity() {
         listView.adapter = adapter
         engine = RecoverEasyEngine(this)
 
+        // ===== บรรทัดแสดงเวอร์ชัน/sha/เลขรอบ build =====
+        val sha   = runCatching { BuildConfig::class.java.getField("GIT_SHA").get(null) as String }.getOrElse { "local" }
+        val runNo = runCatching { BuildConfig::class.java.getField("BUILD_RUN").get(null).toString() }.getOrElse { "-" }
+        tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
+        // ================================================
+
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
             lifecycleScope.launch {
@@ -88,7 +94,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnPreview).setOnClickListener {
-            val i = firstCheckedIndex() ?: return@setOnClickListener Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
+            val i = firstCheckedIndex()
+                ?: return@setOnClickListener Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
             val it = items[i]
             val view = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(it.uri, it.mime ?: "*/*")
@@ -100,7 +107,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnCopy).setOnClickListener {
-            val idx = checkedIndices() ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
+            val idx = checkedIndices()
+                ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
             pendingCopyIndices = idx
             pickDest.launch(null)
         }

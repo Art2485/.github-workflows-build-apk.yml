@@ -119,17 +119,15 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
 
-        // SELECT ALL toggle
+        // SELECT ALL: ใช้การตรวจแบบตรง ๆ จาก isItemChecked ในทุกแถวที่มองเห็น
         findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
-            val visibleCount = visibleIndices.size
-            val currentSelected = checkedVisiblePositions().size
-            val shouldSelectAll = currentSelected < visibleCount || !lastSelectAllWasAll
-            if (shouldSelectAll) {
-                for (pos in 0 until visibleCount) listView.setItemChecked(pos, true)
-                lastSelectAllWasAll = true
-            } else {
-                for (pos in 0 until visibleCount) listView.setItemChecked(pos, false)
+            val allSelected = allVisibleSelected()
+            if (allSelected) {
+                for (pos in 0 until visibleIndices.size) listView.setItemChecked(pos, false)
                 lastSelectAllWasAll = false
+            } else {
+                for (pos in 0 until visibleIndices.size) listView.setItemChecked(pos, true)
+                lastSelectAllWasAll = true
             }
         }
 
@@ -235,6 +233,16 @@ class MainActivity : AppCompatActivity() {
 
         // เคลียร์การเลือก เพราะ mapping เปลี่ยน
         for (pos in 0 until listView.count) listView.setItemChecked(pos, false)
+        lastSelectAllWasAll = false
+    }
+
+    /** แถวที่มองเห็นทุกแถวถูกเลือกครบหรือยัง (ตรวจจาก isItemChecked โดยตรง) */
+    private fun allVisibleSelected(): Boolean {
+        if (visibleIndices.isEmpty()) return false
+        for (pos in 0 until visibleIndices.size) {
+            if (!listView.isItemChecked(pos)) return false
+        }
+        return true
     }
 
     /** ระบุป้ายแหล่งที่มา */
@@ -265,15 +273,5 @@ class MainActivity : AppCompatActivity() {
             if (sparse.valueAt(i)) visibleIndices.getOrNull(pos)?.let { out += it }
         }
         return if (out.isEmpty()) null else out.toIntArray()
-    }
-
-    private fun checkedVisiblePositions(): List<Int> {
-        val out = mutableListOf<Int>()
-        val sparse = listView.checkedItemPositions
-        for (i in 0 until sparse.size()) {
-            val pos = sparse.keyAt(i)
-            if (sparse.valueAt(i)) out += pos
-        }
-        return out
     }
 }

@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import 
+com.recovereasy.app.BuildConfig
 
 class MainActivity : AppCompatActivity() {
 
@@ -56,6 +58,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         tvStatus = findViewById(R.id.tvStatus)
+        val sha   = runCatching { BuildConfig.GIT_SHA }.getOrElse { "local" }
+val runNo = runCatching { BuildConfig.BUILD_RUN }.getOrElse { "-" }
+tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
         listView = findViewById(R.id.listResults)
         listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
         adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf())

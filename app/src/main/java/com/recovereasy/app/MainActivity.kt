@@ -6,24 +6,31 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var listView: ListView
+    private lateinit var progress: ProgressBar
+    private lateinit var btnCancel: Button
     private lateinit var adapter: ArrayAdapter<String>
     private lateinit var engine: RecoverEasyEngine
 
-    private val items = mutableListOf<RecoverEasyEngine.Item>() // ข้อมูลจริงทั้งหมด
-    private val visibleIndices = mutableListOf<Int>()           // map pos(ที่เห็น) -> indexจริง
-    private val damagedSet = mutableSetOf<Int>()                // indexจริงที่เสีย
-
+    private val items = mutableListOf<RecoverEasyEngine.Item>()
+    private val visibleIndices = mutableListOf<Int>()
+    private val damagedSet = mutableSetOf<Int>()
     private var lastSelectAllWasAll = false
+
+    // ยกเลิกสแกน + เวลาเริ่ม/คำนวณ ETA
+    @Volatile private var cancelRequested = false
+    private var scanStartMs: Long = 0L
 
     private enum class Action { COPY, REPAIR }
     private var pendingAction: Action? = null
@@ -31,40 +38,26 @@ class MainActivity : AppCompatActivity() {
 
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* ถ้าไม่ได้สิทธิ์ ให้กดสแกนอีกครั้ง */ }
+    ) { }
 
     private val pickDest = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         val act = pendingAction
         val idx = pendingIndices
-        pendingAction = null
-        pendingIndices = null
+        pendingAction = null; pendingIndices = null
         if (uri == null || act == null || idx == null) return@registerForActivityResult
 
         contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
 
         lifecycleScope.launch {
             var ok = 0
             try {
                 when (act) {
-                    Action.COPY -> {
-                        for (i in idx) {
-                            val it = items[i]
-                            val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
-                            if (out != null) ok++
-                        }
-                    }
-                    Action.REPAIR -> {
-                        for (i in idx) {
-                            val it = items[i]
-                            val out = engine.repairBestEffort(it, uri)
-                            if (out != null) ok++
-                        }
-                    }
+                    Action.COPY -> for (i in idx) engine.safeCopyWithDigest(items[i].uri, uri, items[i].name)?.let { ok++ }
+                    Action.REPAIR -> for (i in idx) engine.repairBestEffort(items[i], uri)?.let { ok++ }
                 }
             } catch (t: Throwable) {
                 Toast.makeText(this@MainActivity, t.message ?: "Error", Toast.LENGTH_LONG).show()
@@ -78,12 +71,16 @@ class MainActivity : AppCompatActivity() {
     ) { uri: Uri? ->
         uri ?: return@registerForActivityResult
         contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
         lifecycleScope.launch {
-            tvStatus.text = "Scanning folder..."
-            val list = engine.scanByFolderAllTypes(uri)
+            startProgress("Scanning folder...")
+            val list = engine.scanByFolderAllTypes(
+                treeUri = uri,
+                progress = { pct, processed, expected, note -> updateProgress(pct, processed, expected, note) },
+                cancelled = { cancelRequested }
+            )
+            stopProgress(cancelRequested)
             setItems(list)
         }
     }
@@ -94,16 +91,28 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
         listView = findViewById(R.id.listResults)
+        progress = findViewById(R.id.progress)
+        btnCancel = findViewById(R.id.btnCancel)
         listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
         adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf())
         listView.adapter = adapter
         engine = RecoverEasyEngine(this)
 
+        btnCancel.setOnClickListener {
+            cancelRequested = true
+            tvStatus.text = "Cancelling..."
+        }
+
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
             lifecycleScope.launch {
-                tvStatus.text = "Scanning phone..."
-                val found = engine.scanPhoneAll(includeTrash = true)
+                startProgress("Scanning phone...")
+                val found = engine.scanPhoneAll(
+                    includeTrash = true,
+                    progress = { pct, processed, expected, note -> updateProgress(pct, processed, expected, note) },
+                    cancelled = { cancelRequested }
+                )
+                stopProgress(cancelRequested)
                 setItems(found)
             }
         }
@@ -111,15 +120,20 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnScanRemovable).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
             lifecycleScope.launch {
-                tvStatus.text = "Scanning SD/OTG..."
-                val found = engine.scanRemovableAll(includeTrash = true)
+                startProgress("Scanning SD/OTG...")
+                val found = engine.scanRemovableAll(
+                    includeTrash = true,
+                    progress = { pct, processed, expected, note -> updateProgress(pct, processed, expected, note) },
+                    cancelled = { cancelRequested }
+                )
+                stopProgress(cancelRequested)
                 setItems(found)
             }
         }
 
         findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
 
-        // SELECT ALL: ใช้การตรวจแบบตรง ๆ จาก isItemChecked ในทุกแถวที่มองเห็น
+        // SELECT ALL (toggle)
         findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
             val allSelected = allVisibleSelected()
             if (allSelected) {
@@ -135,12 +149,9 @@ class MainActivity : AppCompatActivity() {
             val globalIndex = firstCheckedGlobalIndex() ?: return@setOnClickListener
             val it = items[globalIndex]
             val view = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(it.uri, it.mime ?: "*/*")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setDataAndType(it.uri, it.mime ?: "*/*"); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            try {
-                startActivity(view)
-            } catch (_: ActivityNotFoundException) {
+            try { startActivity(view) } catch (_: ActivityNotFoundException) {
                 Toast.makeText(this, "No app to open", Toast.LENGTH_SHORT).show()
             }
         }
@@ -148,38 +159,73 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnCopy).setOnClickListener {
             val globalIdx = checkedGlobalIndices()
                 ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
-            pendingAction = Action.COPY
-            pendingIndices = globalIdx
-            pickDest.launch(null)
+            pendingAction = Action.COPY; pendingIndices = globalIdx; pickDest.launch(null)
         }
 
         findViewById<Button>(R.id.btnCheckDamaged).setOnClickListener {
             lifecycleScope.launch {
                 tvStatus.text = "Checking..."
                 damagedSet.clear()
-                for (pos in items.indices) {
-                    val report = engine.detectCorruption(items[pos])
-                    if (report != null) damagedSet += pos
-                }
-                refreshList()
-                updateStatus("Checked")
+                for (pos in items.indices) engine.detectCorruption(items[pos])?.let { damagedSet += pos }
+                refreshList(); updateStatus("Checked")
             }
         }
 
         findViewById<Button>(R.id.btnRepairSelected).setOnClickListener {
             val globalIdx = checkedGlobalIndices()
                 ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
-            pendingAction = Action.REPAIR
-            pendingIndices = globalIdx
-            pickDest.launch(null)
+            pendingAction = Action.REPAIR; pendingIndices = globalIdx; pickDest.launch(null)
         }
 
         findViewById<CheckBox>(R.id.cbShowDamagedOnly).setOnCheckedChangeListener { _, _ -> refreshList() }
         findViewById<CheckBox>(R.id.cbShowTrashOnly).setOnCheckedChangeListener { _, _ -> refreshList() }
     }
 
-    // ===== Helpers =====
+    // ----- Progress + ETA helpers -----
+    private fun startProgress(status: String) {
+        cancelRequested = false
+        scanStartMs = System.currentTimeMillis()
+        progress.visibility = View.VISIBLE
+        btnCancel.visibility = View.VISIBLE
+        progress.progress = 0
+        tvStatus.text = status
+        setScanButtonsEnabled(false)
+    }
 
+    private fun updateProgress(pct: Int, processed: Int, expected: Int, note: String) {
+        val now = System.currentTimeMillis()
+        val elapsedSec = ((now - scanStartMs).coerceAtLeast(1)).toDouble() / 1000.0
+        val rate = if (elapsedSec > 0) processed / elapsedSec else 0.0 // items/sec
+        val remain = (expected - processed).coerceAtLeast(0)
+        val etaSec = if (rate > 0) (remain / rate) else 0.0
+        val etaText = formatEta(etaSec)
+        runOnUiThread {
+            progress.progress = pct.coerceIn(0, 100)
+            tvStatus.text = "$note ${progress.progress}% • ~$etaText left"
+        }
+    }
+
+    private fun stopProgress(wasCancelled: Boolean) {
+        progress.visibility = View.GONE
+        btnCancel.visibility = View.GONE
+        if (wasCancelled) tvStatus.text = "Cancelled."
+        setScanButtonsEnabled(true)
+    }
+
+    private fun setScanButtonsEnabled(enabled: Boolean) {
+        findViewById<Button>(R.id.btnScanPhone).isEnabled = enabled
+        findViewById<Button>(R.id.btnScanRemovable).isEnabled = enabled
+        findViewById<Button>(R.id.btnPickFolder).isEnabled = enabled
+    }
+
+    private fun formatEta(etaSec: Double): String {
+        val s = etaSec.roundToInt().coerceAtLeast(0)
+        val m = s / 60
+        val ss = s % 60
+        return "%d:%02d".format(m, ss)
+    }
+
+    // ===== Existing helpers =====
     private fun ensureMediaPermission(): Boolean {
         if (Build.VERSION.SDK_INT < 33) return true
         val perms = arrayOf(
@@ -194,10 +240,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun setItems(list: List<RecoverEasyEngine.Item>) {
         items.clear(); items.addAll(list)
-        damagedSet.clear()
-        lastSelectAllWasAll = false
-        refreshList()
-        updateStatus("Found")
+        damagedSet.clear(); lastSelectAllWasAll = false
+        refreshList(); updateStatus("Found")
     }
 
     private fun updateStatus(prefix: String) {
@@ -211,14 +255,12 @@ class MainActivity : AppCompatActivity() {
     private fun refreshList() {
         val showDamagedOnly = findViewById<CheckBox>(R.id.cbShowDamagedOnly).isChecked
         val showTrashOnly = findViewById<CheckBox>(R.id.cbShowTrashOnly).isChecked
-
         visibleIndices.clear()
         for (i in items.indices) {
             val keepDamaged = !showDamagedOnly || damagedSet.contains(i)
             val keepTrash = !showTrashOnly || items[i].isTrashed
             if (keepDamaged && keepTrash) visibleIndices += i
         }
-
         val names = visibleIndices.map { idx ->
             val it = items[idx]
             val src = sourceLabel(it)
@@ -230,22 +272,10 @@ class MainActivity : AppCompatActivity() {
             "$tags ${it.name}"
         }
         adapter.clear(); adapter.addAll(names)
-
-        // เคลียร์การเลือก เพราะ mapping เปลี่ยน
         for (pos in 0 until listView.count) listView.setItemChecked(pos, false)
         lastSelectAllWasAll = false
     }
 
-    /** แถวที่มองเห็นทุกแถวถูกเลือกครบหรือยัง (ตรวจจาก isItemChecked โดยตรง) */
-    private fun allVisibleSelected(): Boolean {
-        if (visibleIndices.isEmpty()) return false
-        for (pos in 0 until visibleIndices.size) {
-            if (!listView.isItemChecked(pos)) return false
-        }
-        return true
-    }
-
-    /** ระบุป้ายแหล่งที่มา */
     private fun sourceLabel(it: RecoverEasyEngine.Item): String {
         val v = it.volumeId?.lowercase()
         return when {
@@ -273,5 +303,11 @@ class MainActivity : AppCompatActivity() {
             if (sparse.valueAt(i)) visibleIndices.getOrNull(pos)?.let { out += it }
         }
         return if (out.isEmpty()) null else out.toIntArray()
+    }
+
+    private fun allVisibleSelected(): Boolean {
+        if (visibleIndices.isEmpty()) return false
+        for (pos in 0 until visibleIndices.size) if (!listView.isItemChecked(pos)) return false
+        return true
     }
 }

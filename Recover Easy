@@ -1,0 +1,743 @@
+name: Bootstrap + Build RecoverEasy (clean)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap_build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+          yes | sdkmanager --licenses > /dev/null
+
+      - name: Generate project (source only) and commit
+        shell: bash
+        run: |
+          set -e
+          rm -rf app gradle gradlew gradlew.bat settings.gradle.kts build.gradle.kts gradle.properties
+
+          mkdir -p app/src/main/java/com/recovereasy/app
+          mkdir -p app/src/main/res/{layout,values}
+
+          # .gitignore ป้องกันไฟล์ build/ไบนารีหลุดเข้ามา
+          cat > .gitignore <<'EOF'
+          .gradle/
+          /build/
+          app/build/
+          gradle/
+          *.zip
+          *.apk
+          *.aab
+          .idea/
+          .cxx/
+          local.properties
+          EOF
+
+          # Gradle settings (root)
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { gradlePluginPortal(); google(); mavenCentral() } }
+          dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "RecoverEasy"
+          include(":app")
+          EOF
+
+          # root build (ว่างได้)
+          echo "// root" > build.gradle.kts
+
+          # Module :app
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+            id("com.android.application") version "8.5.2"
+            id("org.jetbrains.kotlin.android") version "1.9.24"
+          }
+
+          android {
+            namespace = "com.recovereasy.app"
+            compileSdk = 34
+
+            defaultConfig {
+              applicationId = "com.recovereasy.app"
+              minSdk = 26
+              targetSdk = 34
+              versionCode = 1
+              versionName = "1.0"
+            }
+
+            buildTypes {
+              release {
+                isMinifyEnabled = false
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+              }
+            }
+
+            compileOptions {
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+            }
+            kotlinOptions { jvmTarget = "17" }
+          }
+
+          dependencies {
+            implementation("androidx.core:core-ktx:1.13.1")
+            implementation("androidx.appcompat:appcompat:1.7.0")
+            implementation("com.google.android.material:material:1.12.0")
+            implementation("androidx.activity:activity-ktx:1.9.2")
+            implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
+            implementation("androidx.documentfile:documentfile:1.0.1")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+          }
+          EOF
+
+          echo "// default" > app/proguard-rules.pro
+
+          # Manifest (มีธีม AppCompat + permissions Android 13+)
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application
+                android:label="RecoverEasy"
+                android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+              <activity android:name=".MainActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+            </application>
+
+            <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+            <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+            <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+          </manifest>
+          EOF
+
+          # Layout + รายการเลือกได้ + ปุ่ม Select All / Preview / Copy Selected
+          cat > app/src/main/res/layout/activity_main.xml <<'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="16dp">
+
+              <Button
+                  android:id="@+id/btnScanPhone"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="SCAN PHONE (ALL MEDIA + TRASH)"/>
+
+              <Button
+                  android:id="@+id/btnScanRemovable"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"/>
+
+              <Button
+                  android:id="@+id/btnPickFolder"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:text="SCAN BY FOLDER (ALL TYPES)"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:orientation="horizontal">
+                  <Button
+                      android:id="@+id/btnSelectAll"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="SELECT ALL"/>
+                  <Button
+                      android:id="@+id/btnPreview"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:layout_marginStart="8dp"
+                      android:text="PREVIEW"/>
+                  <Button
+                      android:id="@+id/btnCopy"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:layout_marginStart="8dp"
+                      android:text="COPY SELECTED"/>
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/tvStatus"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="8dp"
+                  android:text="Ready."/>
+
+              <ListView
+                  android:id="@+id/listResults"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:choiceMode="multipleChoice"/>
+          </LinearLayout>
+          EOF
+
+          # MainActivity.kt — รายการเลือกได้ + พรีวิว + คัดลอกแบบปลอดภัย
+          cat > app/src/main/java/com/recovereasy/app/MainActivity.kt <<'EOF'
+          package com.recovereasy.app
+
+          import android.Manifest
+          import android.content.ActivityNotFoundException
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Build
+          import android.os.Bundle
+          import android.widget.*
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.lifecycle.lifecycleScope
+          import kotlinx.coroutines.launch
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var tvStatus: TextView
+              private lateinit var listView: ListView
+              private lateinit var adapter: ArrayAdapter<String>
+              private lateinit var engine: RecoverEasyEngine
+              private val items = mutableListOf<RecoverEasyEngine.Item>()
+
+              private val reqPerms = registerForActivityResult(
+                  ActivityResultContracts.RequestMultiplePermissions()
+              ) { /* ถ้าไม่ได้สิทธิ์ ผู้ใช้กดซ้ำอีกครั้งได้ */ }
+
+              private var pendingCopyIndices: IntArray? = null
+              private val pickDest = registerForActivityResult(
+                  ActivityResultContracts.OpenDocumentTree()
+              ) { uri: Uri? ->
+                  val idx = pendingCopyIndices
+                  pendingCopyIndices = null
+                  if (uri == null || idx == null) return@registerForActivityResult
+                  contentResolver.takePersistableUriPermission(
+                      uri,
+                      Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                  )
+                  lifecycleScope.launch {
+                      try {
+                          var ok = 0
+                          for (i in idx) {
+                              val it = items[i]
+                              val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
+                              if (out != null) ok++
+                          }
+                          tvStatus.text = "Copied: $ok / ${idx.size}"
+                      } catch (t: Throwable) {
+                          Toast.makeText(this@MainActivity, t.message ?: "Copy error", Toast.LENGTH_LONG).show()
+                      }
+                  }
+              }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  tvStatus = findViewById(R.id.tvStatus)
+                  listView = findViewById(R.id.listResults)
+                  listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
+                  adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf())
+                  listView.adapter = adapter
+                  engine = RecoverEasyEngine(this)
+
+                  findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
+                      if (!ensureMediaPermission()) return@setOnClickListener
+                      lifecycleScope.launch {
+                          tvStatus.text = "Scanning phone..."
+                          val found = engine.scanPhoneAll(includeTrash = true)
+                          setItems(found)
+                      }
+                  }
+
+                  findViewById<Button>(R.id.btnScanRemovable).setOnClickListener {
+                      if (!ensureMediaPermission()) return@setOnClickListener
+                      lifecycleScope.launch {
+                          tvStatus.text = "Scanning SD/OTG..."
+                          val found = engine.scanRemovableAll(includeTrash = true)
+                          setItems(found)
+                      }
+                  }
+
+                  findViewById<Button>(R.id.btnPickFolder).setOnClickListener {
+                      pickFolder.launch(null)
+                  }
+
+                  findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
+                      for (i in 0 until adapter.count) listView.setItemChecked(i, true)
+                  }
+
+                  findViewById<Button>(R.id.btnPreview).setOnClickListener {
+                      val i = firstCheckedIndex() ?: return@setOnClickListener Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
+                      val it = items[i]
+                      val view = Intent(Intent.ACTION_VIEW).apply {
+                          setDataAndType(it.uri, it.mime ?: "*/*")
+                          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                      }
+                      try { startActivity(view) } catch (_: ActivityNotFoundException) {
+                          Toast.makeText(this, "No app to open", Toast.LENGTH_SHORT).show()
+                      }
+                  }
+
+                  findViewById<Button>(R.id.btnCopy).setOnClickListener {
+                      val idx = checkedIndices() ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
+                      pendingCopyIndices = idx
+                      pickDest.launch(null)
+                  }
+              }
+
+              private val pickFolder = registerForActivityResult(
+                  ActivityResultContracts.OpenDocumentTree()
+              ) { uri: Uri? ->
+                  uri ?: return@registerForActivityResult
+                  contentResolver.takePersistableUriPermission(
+                      uri,
+                      Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                  )
+                  lifecycleScope.launch {
+                      tvStatus.text = "Scanning folder..."
+                      val list = engine.scanByFolderAllTypes(uri)
+                      setItems(list)
+                  }
+              }
+
+              private fun setItems(list: List<RecoverEasyEngine.Item>) {
+                  items.clear(); items.addAll(list)
+                  val names = list.map { (if (it.isTrashed) "[TRASH] " else "") + it.name }
+                  adapter.clear(); adapter.addAll(names)
+                  tvStatus.text = "Found: ${list.size} items"
+              }
+
+              private fun ensureMediaPermission(): Boolean {
+                  if (Build.VERSION.SDK_INT < 33) return true
+                  val perms = arrayOf(
+                      Manifest.permission.READ_MEDIA_IMAGES,
+                      Manifest.permission.READ_MEDIA_VIDEO,
+                      Manifest.permission.READ_MEDIA_AUDIO
+                  )
+                  val need = perms.any { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
+                  if (need) reqPerms.launch(perms)
+                  return !need
+              }
+
+              private fun firstCheckedIndex(): Int? {
+                  val sparse = listView.checkedItemPositions
+                  for (i in 0 until sparse.size()) {
+                      val key = sparse.keyAt(i)
+                      if (sparse.valueAt(i)) return key
+                  }
+                  return null
+              }
+
+              private fun checkedIndices(): IntArray? {
+                  val sparse = listView.checkedItemPositions
+                  val out = mutableListOf<Int>()
+                  for (i in 0 until sparse.size()) {
+                      val key = sparse.keyAt(i)
+                      if (sparse.valueAt(i)) out += key
+                  }
+                  return if (out.isEmpty()) null else out.toIntArray()
+              }
+          }
+          EOF
+
+          # RecoverEasyEngine.kt — ใช้ BitmapFactory (หลีกเลี่ยง ImageDecoder), รวมสแกน/ซ่อม/คัดลอกปลอดภัย
+          cat > app/src/main/java/com/recovereasy/app/RecoverEasyEngine.kt <<'EOF'
+          @file:Suppress("DEPRECATION", "unused")
+          package com.recovereasy.app
+
+          import android.annotation.SuppressLint
+          import android.content.ContentUris
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Bitmap
+          import android.graphics.BitmapFactory
+          import android.net.Uri
+          import android.os.Build
+          import android.provider.DocumentsContract
+          import android.provider.MediaStore
+          import android.system.Os
+          import androidx.documentfile.provider.DocumentFile
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.withContext
+          import java.io.BufferedInputStream
+          import java.io.BufferedOutputStream
+          import java.io.InputStream
+          import java.io.OutputStream
+          import java.nio.ByteBuffer
+          import java.security.MessageDigest
+          import java.util.zip.ZipEntry
+          import java.util.zip.ZipInputStream
+          import java.util.zip.ZipOutputStream
+
+          class RecoverEasyEngine(private val context: Context) {
+
+              data class Item(
+                  val uri: Uri,
+                  val name: String,
+                  val mime: String?,
+                  val size: Long,
+                  val volumeId: String?,
+                  val kind: Kind,
+                  val isTrashed: Boolean
+              )
+              enum class Kind { IMAGE, VIDEO, AUDIO, DOC, ARCHIVE, OTHER }
+
+              suspend fun scanPhoneAll(includeTrash: Boolean = true): List<Item> =
+                  queryByVolume(MediaStore.VOLUME_EXTERNAL_PRIMARY, includeTrash)
+
+              suspend fun scanRemovableAll(includeTrash: Boolean = true): List<Item> = withContext(Dispatchers.IO) {
+                  val names = MediaStore.getExternalVolumeNames(context)
+                  val removable = names.filter { it != MediaStore.VOLUME_EXTERNAL_PRIMARY }
+                  val out = mutableListOf<Item>()
+                  for (v in removable) out += queryByVolume(v, includeTrash)
+                  out
+              }
+
+              suspend fun scanByFolderAllTypes(treeUri: Uri): List<Item> = listFromTree(treeUri)
+
+              suspend fun repairBestEffort(src: Item, destDir: Uri): Uri? = when (src.kind) {
+                  Kind.IMAGE -> repairImageToJpeg(src.uri, destDir)
+                  Kind.VIDEO -> remuxVideoMp4(src.uri, destDir)
+                  Kind.AUDIO -> remuxAudioContainer(src.uri, destDir)
+                  Kind.DOC -> if (src.name.endsWith(".pdf", true)) repairPdfBasic(src.uri, destDir) else safeCopyWithDigest(src.uri, destDir, src.name)
+                  Kind.ARCHIVE -> salvageZipLike(src.uri, destDir)
+                  Kind.OTHER -> safeCopyWithDigest(src.uri, destDir, src.name)
+              }
+
+              @SuppressLint("InlinedApi")
+              fun requestUntrash(uris: List<Uri>) {
+                  val req = MediaStore.createTrashRequest(context.contentResolver, uris, false)
+                  if (Build.VERSION.SDK_INT >= 26) {
+                      (context as? android.app.Activity)?.startIntentSenderForResult(
+                          req.intentSender, 2001, null, 0, 0, 0
+                      )
+                  }
+              }
+
+              @SuppressLint("InlinedApi")
+              private suspend fun queryByVolume(volume: String, includeTrash: Boolean): List<Item> = withContext(Dispatchers.IO) {
+                  val out = mutableListOf<Item>()
+                  val resolver = context.contentResolver
+                  val collections = listOf(
+                      MediaStore.Images.Media.getContentUri(volume),
+                      MediaStore.Video.Media.getContentUri(volume),
+                      MediaStore.Audio.Media.getContentUri(volume)
+                  )
+                  val proj = arrayOf(
+                      MediaStore.MediaColumns._ID,
+                      MediaStore.MediaColumns.DISPLAY_NAME,
+                      MediaStore.MediaColumns.MIME_TYPE,
+                      MediaStore.MediaColumns.SIZE,
+                      MediaStore.MediaColumns.IS_TRASHED
+                  )
+                  val sel = if (includeTrash) null else "${MediaStore.MediaColumns.IS_TRASHED}=0"
+                  val order = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+                  for (base in collections) {
+                      resolver.query(base, proj, sel, null, order)?.use { c ->
+                          val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                          val name = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                          val mime = c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                          val size = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                          val trash = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_TRASHED)
+                          while (c.moveToNext()) {
+                              val u = ContentUris.withAppendedId(base, c.getLong(id))
+                              val nm = c.getString(name) ?: ""
+                              val mm = c.getString(mime)
+                              val sz = c.getLong(size)
+                              val it = Item(u, nm, mm, sz, volume, guessKind(nm, mm), c.getInt(trash) == 1)
+                              out += it
+                          }
+                      }
+                  }
+                  out
+              }
+
+              private suspend fun listFromTree(treeUri: Uri): List<Item> = withContext(Dispatchers.IO) {
+                  val root = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext emptyList()
+                  val acc = mutableListOf<Item>()
+                  fun walk(dir: DocumentFile) {
+                      dir.listFiles().forEach { f ->
+                          if (f.isDirectory) walk(f) else acc += Item(
+                              uri = f.uri,
+                              name = f.name ?: "",
+                              mime = f.type,
+                              size = f.length(),
+                              volumeId = extractVolumeId(f.uri),
+                              kind = guessKind(f.name ?: "", f.type),
+                              isTrashed = false
+                          )
+                      }
+                  }
+                  walk(root)
+                  acc
+              }
+
+              suspend fun detectCorruption(item: Item): CorruptReport? = withContext(Dispatchers.IO) {
+                  try {
+                      when (item.kind) {
+                          Kind.IMAGE -> if (!probeImage(item.uri)) CorruptReport(item, "อ่านรูปไม่ได้/ข้อมูลไม่ครบ", true) else null
+                          Kind.VIDEO -> if (!probeVideo(item.uri)) CorruptReport(item, "วิดีโออ่าน track ไม่ได้หรือข้อมูลผิดรูป", true) else null
+                          Kind.AUDIO -> if (!probeAudio(item.uri)) CorruptReport(item, "เสียงอ่าน metadata/สตรีมไม่ได้", true) else null
+                          Kind.DOC -> if (!probeDocument(item)) CorruptReport(item, "เอกสารเสียหรือเปิดไม่ได้", false) else null
+                          Kind.ARCHIVE -> if (!probeZipLike(item.uri)) CorruptReport(item, "ไฟล์บีบอัดเสีย/entry เสียหาย", true) else null
+                          Kind.OTHER -> if (!probeGeneric(item.uri)) CorruptReport(item, "ไฟล์อาจเสีย (อ่านไม่ได้)", false) else null
+                      }
+                  } catch (_: Throwable) { CorruptReport(item, "ข้อผิดพลาดขณะตรวจสอบ", false) }
+              }
+
+              data class CorruptReport(
+                  val item: Item,
+                  val reason: String,
+                  val fixable: Boolean,
+                  val volumeId: String? = item.volumeId
+              )
+
+              private fun probeImage(uri: Uri) = runCatching {
+                  context.contentResolver.openInputStream(uri)?.use { ins ->
+                      val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                      BitmapFactory.decodeStream(ins, null, opts)
+                      opts.outWidth > 0 && opts.outHeight > 0
+                  } ?: false
+              }.getOrDefault(false)
+
+              private fun probeVideo(uri: Uri) = runCatching {
+                  val ex = android.media.MediaExtractor()
+                  ex.setDataSource(context, uri, null)
+                  var ok = ex.trackCount > 0
+                  if (ok) {
+                      ex.selectTrack(0)
+                      val buf = ByteBuffer.allocate(1 shl 16)
+                      ok = ex.readSampleData(buf, 0) >= 0
+                  }
+                  ex.release(); ok
+              }.getOrDefault(false)
+
+              private fun probeAudio(uri: Uri) = runCatching {
+                  val r = android.media.MediaMetadataRetriever()
+                  r.setDataSource(context, uri)
+                  val has = r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION) != null
+                  r.release(); has
+              }.getOrDefault(false)
+
+              private fun probeDocument(item: Item): Boolean {
+                  val n = item.name.lowercase()
+                  return when {
+                      n.endsWith(".pdf") -> probePdf(item.uri)
+                      n.endsWith(".txt") || n.endsWith(".csv") -> probeText(item.uri)
+                      n.endsWith(".docx") || n.endsWith(".xlsx") || n.endsWith(".pptx") -> probeZipLike(item.uri)
+                      else -> probeGeneric(item.uri)
+                  }
+              }
+
+              private fun probePdf(uri: Uri) = runCatching {
+                  context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                      android.graphics.pdf.PdfRenderer(pfd).use { it.pageCount > 0 }
+                  } ?: false
+              }.getOrDefault(false)
+
+              private fun probeText(uri: Uri) = runCatching {
+                  context.contentResolver.openInputStream(uri)?.use { it.read(ByteArray(1024)) >= 0 } ?: false
+              }.getOrDefault(false)
+
+              private fun probeZipLike(uri: Uri) = runCatching {
+                  context.contentResolver.openInputStream(uri)?.use { ins ->
+                      ZipInputStream(BufferedInputStream(ins)).use { zis ->
+                          var entries = 0; val buf = ByteArray(8192)
+                          while (true) { val e = zis.nextEntry ?: break; entries++; while (zis.read(buf) > 0) {}; zis.closeEntry() }
+                          entries >= 0
+                      }
+                  } ?: false
+              }.getOrDefault(false)
+
+              private fun probeGeneric(uri: Uri) = runCatching {
+                  context.contentResolver.openInputStream(uri)?.use { it.read(ByteArray(1024)) >= 0 } ?: false
+              }.getOrDefault(false)
+
+              suspend fun repairImageToJpeg(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
+                  try {
+                      val name = (queryName(src) ?: "image").substringBeforeLast(".") + "_fixed.jpg"
+                      val outDoc = createDestFile(destDir, "image/jpeg", name) ?: return@withContext null
+                      val bmp = context.contentResolver.openInputStream(src)?.use { ins -> BitmapFactory.decodeStream(ins) } ?: return@withContext null
+                      context.contentResolver.openOutputStream(outDoc.uri)?.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                      context.contentResolver.openFileDescriptor(outDoc.uri, "rw")?.use { p -> Os.fsync(p.fileDescriptor) }
+                      outDoc.uri
+                  } catch (_: Exception) { null }
+              }
+
+              suspend fun remuxVideoMp4(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
+                  try {
+                      val name = (queryName(src)?.substringBeforeLast(".") ?: "video") + "_fixed.mp4"
+                      val outDoc = createDestFile(destDir, "video/mp4", name) ?: return@withContext null
+                      val ex = android.media.MediaExtractor(); ex.setDataSource(context, src, null)
+                      val pfd = context.contentResolver.openFileDescriptor(outDoc.uri, "rw") ?: return@withContext null
+                      val mux = android.media.MediaMuxer(pfd.fileDescriptor, android.media.MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                      val map = mutableMapOf<Int, Int>()
+                      for (i in 0 until ex.trackCount) map[i] = mux.addTrack(ex.getTrackFormat(i))
+                      mux.start()
+                      val buf = ByteBuffer.allocate(1 shl 20)
+                      val info = android.media.MediaCodec.BufferInfo()
+                      for ((inIdx, outIdx) in map) {
+                          ex.unselectTrack(inIdx); ex.selectTrack(inIdx)
+                          while (true) {
+                              info.offset = 0
+                              info.size = ex.readSampleData(buf, 0)
+                              if (info.size < 0) break
+                              info.presentationTimeUs = ex.sampleTime
+                              info.flags = ex.sampleFlags
+                              mux.writeSampleData(outIdx, buf, info)
+                              ex.advance()
+                          }
+                      }
+                      mux.stop(); mux.release(); ex.release()
+                      context.contentResolver.openFileDescriptor(outDoc.uri, "rw")?.use { p -> Os.fsync(p.fileDescriptor) }
+                      outDoc.uri
+                  } catch (_: Exception) { null }
+              }
+
+              suspend fun remuxAudioContainer(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
+                  if (!probeAudio(src)) return@withContext null
+                  val base = (queryName(src)?.substringBeforeLast(".") ?: "audio")
+                  safeCopyWithDigest(src, destDir, "${base}_fixed.m4a")
+              }
+
+              suspend fun repairPdfBasic(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
+                  if (!probePdf(src)) return@withContext null
+                  safeCopyWithDigest(src, destDir, (queryName(src)?.substringBeforeLast(".") ?: "doc") + "_fixed.pdf")
+              }
+
+              suspend fun salvageZipLike(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
+                  try {
+                      val base = (queryName(src)?.substringBeforeLast(".") ?: "archive")
+                      val out = createDestFile(destDir, "application/zip", "${base}_fixed.zip") ?: return@withContext null
+                      context.contentResolver.openInputStream(src)?.use { ins ->
+                          ZipInputStream(BufferedInputStream(ins)).use { zis ->
+                              context.contentResolver.openOutputStream(out.uri)?.use { os ->
+                                  ZipOutputStream(BufferedOutputStream(os)).use { zos ->
+                                      var e: ZipEntry?; val buf = ByteArray(8192)
+                                      while (true) {
+                                          e = zis.nextEntry ?: break
+                                          try {
+                                              zos.putNextEntry(ZipEntry(e!!.name))
+                                              while (true) { val n = zis.read(buf); if (n <= 0) break; zos.write(buf, 0, n) }
+                                              zos.closeEntry()
+                                          } catch (_: Exception) { } finally { zis.closeEntry() }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                      context.contentResolver.openFileDescriptor(out.uri, "rw")?.use { p -> Os.fsync(p.fileDescriptor) }
+                      out.uri
+                  } catch (_: Exception) { null }
+              }
+
+              suspend fun safeCopyWithDigest(src: Uri, destDir: Uri, outName: String): Uri? = withContext(Dispatchers.IO) {
+                  try {
+                      val tmp = createDestFile(destDir, "application/octet-stream", "$outName.part") ?: return@withContext null
+                      val md = MessageDigest.getInstance("SHA-256")
+                      context.contentResolver.openInputStream(src)?.use { `in` ->
+                          context.contentResolver.openOutputStream(tmp.uri, "w")?.use { out ->
+                              copyStreamDigest(`in`, out, md)
+                              out.flush()
+                              context.contentResolver.openFileDescriptor(tmp.uri, "rw")?.use { pfd -> Os.fsync(pfd.fileDescriptor) }
+                          }
+                      }
+                      DocumentsContract.renameDocument(context.contentResolver, tmp.uri, outName) ?: tmp.uri
+                  } catch (_: Exception) { null }
+              }
+
+              private fun copyStreamDigest(`in`: InputStream, out: OutputStream, md: MessageDigest) {
+                  val buf = ByteArray(1 shl 16)
+                  while (true) { val n = `in`.read(buf); if (n < 0) break; md.update(buf, 0, n); out.write(buf, 0, n) }
+              }
+
+              private fun queryName(uri: Uri): String? = context.contentResolver.query(
+                  uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null
+              )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
+              private fun createDestFile(destDir: Uri, mime: String, name: String): DocumentFile? {
+                  val dir = DocumentFile.fromTreeUri(context, destDir) ?: return null
+                  dir.findFile(name)?.delete()
+                  return dir.createFile(mime, name)
+              }
+
+              private fun extractVolumeId(uri: Uri): String? {
+                  val s = uri.toString()
+                  val idx = s.indexOf("documents/tree/")
+                  if (idx >= 0) {
+                      val tail = s.substring(idx + "documents/tree/".length)
+                      val vol = tail.substringBefore("%3A").substringBefore(":")
+                      return if (vol.contains("-")) vol else null
+                  }
+                  return null
+              }
+
+              private fun guessKind(name: String, mime: String?): Kind {
+                  val n = name.lowercase()
+                  return when {
+                      mime?.startsWith("image/") == true || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.endsWith(".webp") || n.endsWith(".heic") || n.endsWith(".heif") || n.endsWith(".avif") || n.endsWith(".gif") -> Kind.IMAGE
+                      mime?.startsWith("video/") == true || n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".m4v") || n.endsWith(".3gp") || n.endsWith(".mkv") -> Kind.VIDEO
+                      mime?.startsWith("audio/") == true || n.endsWith(".mp3") || n.endsWith(".m4a") || n.endsWith(".aac") || n.endsWith(".wav") || n.endsWith(".flac") || n.endsWith(".ogg") || n.endsWith(".opus") -> Kind.AUDIO
+                      n.endsWith(".pdf") || n.endsWith(".txt") || n.endsWith(".csv") || n.endsWith(".doc") || n.endsWith(".docx") || n.endsWith(".xls") || n.endsWith(".xlsx") || n.endsWith(".ppt") || n.endsWith(".pptx") -> Kind.DOC
+                      n.endsWith(".zip") || n.endsWith(".rar") || n.endsWith(".7z") || n.endsWith(".tar") || n.endsWith(".gz") -> Kind.ARCHIVE
+                      else -> Kind.OTHER
+                  }
+              }
+          }
+          EOF
+
+          # commit โค้ดเข้ากลับ repo (ครั้งแรก)
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Bootstrap RecoverEasy clean project"
+            git push
+          fi
+
+      - name: Build Debug APK
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: "8.9"
+          arguments: assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk

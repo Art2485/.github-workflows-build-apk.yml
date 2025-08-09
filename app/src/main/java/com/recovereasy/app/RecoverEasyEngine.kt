@@ -4,7 +4,6 @@ package com.recovereasy.app
 import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -24,61 +23,110 @@ import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlin.math.max
+
+// เพิ่ม processed/expected เพื่อให้ UI คำนวณ ETA ได้แม่นยำ
+typealias ProgressCallback = (percent: Int, processed: Int, expected: Int, note: String) -> Unit
 
 class RecoverEasyEngine(private val context: Context) {
 
     data class Item(
-        val uri: Uri,
-        val name: String,
-        val mime: String?,
-        val size: Long,
-        val volumeId: String?,
-        val kind: Kind,
-        val isTrashed: Boolean
+        val uri: Uri, val name: String, val mime: String?, val size: Long,
+        val volumeId: String?, val kind: Kind, val isTrashed: Boolean
     )
     enum class Kind { IMAGE, VIDEO, AUDIO, DOC, ARCHIVE, OTHER }
 
-    suspend fun scanPhoneAll(includeTrash: Boolean = true): List<Item> =
-        queryByVolume(MediaStore.VOLUME_EXTERNAL_PRIMARY, includeTrash)
+    // ---------- Scans with progress + cancel ----------
+    suspend fun scanPhoneAll(
+        includeTrash: Boolean = true,
+        progress: ProgressCallback? = null,
+        cancelled: (() -> Boolean)? = null
+    ): List<Item> = queryByVolumes(
+        volumes = listOf(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+        includeTrash = includeTrash,
+        includeDocs = true,
+        progress = progress,
+        cancelled = cancelled
+    )
 
-    suspend fun scanRemovableAll(includeTrash: Boolean = true): List<Item> = withContext(Dispatchers.IO) {
-        val names = MediaStore.getExternalVolumeNames(context)
-        val removable = names.filter { it != MediaStore.VOLUME_EXTERNAL_PRIMARY }
-        val out = mutableListOf<Item>()
-        for (v in removable) out += queryByVolume(v, includeTrash)
-        out
+    suspend fun scanRemovableAll(
+        includeTrash: Boolean = true,
+        progress: ProgressCallback? = null,
+        cancelled: (() -> Boolean)? = null
+    ): List<Item> = withContext(Dispatchers.IO) {
+        val names = MediaStore.getExternalVolumeNames(context).filter { it != MediaStore.VOLUME_EXTERNAL_PRIMARY }
+        queryByVolumes(
+            volumes = names,
+            includeTrash = includeTrash,
+            includeDocs = true,
+            progress = progress,
+            cancelled = cancelled
+        )
     }
 
-    suspend fun scanByFolderAllTypes(treeUri: Uri): List<Item> = listFromTree(treeUri)
+    suspend fun scanByFolderAllTypes(
+        treeUri: Uri,
+        progress: ProgressCallback? = null,
+        cancelled: (() -> Boolean)? = null
+    ): List<Item> = withContext(Dispatchers.IO) {
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext emptyList()
+        val expected = countFiles(root, cancelled)
+        var processed = 0
+        val acc = mutableListOf<Item>()
+        fun walk(dir: DocumentFile) {
+            if (cancelled?.invoke() == true) return
+            dir.listFiles().forEach { f ->
+                if (cancelled?.invoke() == true) return
+                if (f.isDirectory) {
+                    walk(f)
+                } else {
+                    acc += Item(
+                        uri = f.uri,
+                        name = f.name ?: "",
+                        mime = f.type,
+                        size = f.length(),
+                        volumeId = extractVolumeId(f.uri),
+                        kind = guessKind(f.name ?: "", f.type),
+                        isTrashed = false
+                    )
+                    processed++
+                    report(progress, processed, expected, "Scanning folder")
+                }
+            }
+        }
+        walk(root); acc
+    }
 
+    // ---------- Corruption / Repairs / Copy ----------
     suspend fun repairBestEffort(src: Item, destDir: Uri): Uri? = when (src.kind) {
         Kind.IMAGE -> repairImageToJpeg(src.uri, destDir)
         Kind.VIDEO -> remuxVideoMp4(src.uri, destDir)
         Kind.AUDIO -> remuxAudioContainer(src.uri, destDir)
-        Kind.DOC -> if (src.name.endsWith(".pdf", true)) repairPdfBasic(src.uri, destDir) else safeCopyWithDigest(src.uri, destDir, src.name)
+        Kind.DOC -> if ((src.name).endsWith(".pdf", true)) repairPdfBasic(src.uri, destDir)
+                     else safeCopyWithDigest(src.uri, destDir, src.name)
         Kind.ARCHIVE -> salvageZipLike(src.uri, destDir)
         Kind.OTHER -> safeCopyWithDigest(src.uri, destDir, src.name)
     }
 
+    data class CorruptReport(val item: Item, val reason: String, val fixable: Boolean, val volumeId: String? = item.volumeId)
+
+    // ---------- Internal: MediaStore multi-volume (media + docs) with progress + cancel ----------
     @SuppressLint("InlinedApi")
-    fun requestUntrash(uris: List<Uri>) {
-        val req = MediaStore.createTrashRequest(context.contentResolver, uris, false)
-        if (Build.VERSION.SDK_INT >= 26) {
-            (context as? android.app.Activity)?.startIntentSenderForResult(
-                req.intentSender, 2001, null, 0, 0, 0
+    private suspend fun queryByVolumes(
+        volumes: List<String>,
+        includeTrash: Boolean,
+        includeDocs: Boolean,
+        progress: ProgressCallback?,
+        cancelled: (() -> Boolean)?
+    ): List<Item> = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val mediaCollectionsOf = { v: String ->
+            listOf(
+                MediaStore.Images.Media.getContentUri(v),
+                MediaStore.Video.Media.getContentUri(v),
+                MediaStore.Audio.Media.getContentUri(v)
             )
         }
-    }
-
-    @SuppressLint("InlinedApi")
-    private suspend fun queryByVolume(volume: String, includeTrash: Boolean): List<Item> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<Item>()
-        val resolver = context.contentResolver
-        val collections = listOf(
-            MediaStore.Images.Media.getContentUri(volume),
-            MediaStore.Video.Media.getContentUri(volume),
-            MediaStore.Audio.Media.getContentUri(volume)
-        )
         val proj = arrayOf(
             MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
@@ -87,47 +135,116 @@ class RecoverEasyEngine(private val context: Context) {
             MediaStore.MediaColumns.IS_TRASHED
         )
         val sel = if (includeTrash) null else "${MediaStore.MediaColumns.IS_TRASHED}=0"
+
+        // 1) Count expected (รวมไฟล์เอกสารถ้าเปิดใช้งาน)
+        var expected = 0
+        loop@ for (v in volumes) {
+            for (base in mediaCollectionsOf(v)) {
+                if (cancelled?.invoke() == true) break@loop
+                resolver.query(base, arrayOf(MediaStore.MediaColumns._ID), sel, null, null)?.use { c ->
+                    expected += c.count
+                }
+            }
+            if (includeDocs) {
+                if (cancelled?.invoke() == true) break@loop
+                expected += countFilesTableRough(v, includeTrash)
+            }
+        }
+        expected = max(expected, 1)
+
+        // 2) Iterate media
+        var processed = 0
+        val out = mutableListOf<Item>()
         val order = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
-        for (base in collections) {
-            resolver.query(base, proj, sel, null, order)?.use { c ->
-                val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                val name = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
-                val mime = c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
-                val size = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
-                val trash = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_TRASHED)
-                while (c.moveToNext()) {
-                    val u = ContentUris.withAppendedId(base, c.getLong(id))
-                    val nm = c.getString(name) ?: ""
-                    val mm = c.getString(mime)
-                    val sz = c.getLong(size)
-                    val it = Item(u, nm, mm, sz, volume, guessKind(nm, mm), c.getInt(trash) == 1)
-                    out += it
+        outer@ for (v in volumes) {
+            // images/videos/audios
+            for (base in mediaCollectionsOf(v)) {
+                if (cancelled?.invoke() == true) break@outer
+                resolver.query(base, proj, sel, null, order)?.use { c ->
+                    val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val name = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                    val mime = c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                    val size = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                    val trash = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_TRASHED)
+                    while (c.moveToNext()) {
+                        val u = ContentUris.withAppendedId(base, c.getLong(id))
+                        val nm = c.getString(name) ?: ""
+                        val mm = c.getString(mime)
+                        val sz = c.getLong(size)
+                        out += Item(u, nm, mm, sz, v, guessKind(nm, mm), c.getInt(trash) == 1)
+                        processed++
+                        report(progress, processed, expected, "Scanning media")
+                        if (cancelled?.invoke() == true) break
+                    }
+                }
+            }
+            // docs/archives via Files table (ถ้าอนุญาตได้)
+            if (includeDocs) {
+                if (cancelled?.invoke() == true) break@outer
+                try {
+                    val filesUri = MediaStore.Files.getContentUri(v)
+                    val selDocs = buildString {
+                        append("(")
+                        append("${MediaStore.MediaColumns.MIME_TYPE} LIKE 'application/%'")
+                        append(" OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE 'text/%'")
+                        append(")")
+                        if (!includeTrash) append(" AND ${MediaStore.MediaColumns.IS_TRASHED}=0")
+                        // ตัด MIME ของรูป/วิดีโอ/เสียงออกกันซ้ำ
+                        append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'image/%'")
+                        append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'video/%'")
+                        append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'audio/%'")
+                    }
+                    resolver.query(filesUri, proj, selDocs, null, order)?.use { c ->
+                        val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                        val name = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                        val mime = c.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                        val size = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                        val trash = c.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_TRASHED)
+                        while (c.moveToNext()) {
+                            val u = ContentUris.withAppendedId(filesUri, c.getLong(id))
+                            val nm = c.getString(name) ?: ""
+                            val mm = c.getString(mime)
+                            val sz = c.getLong(size)
+                            val kind = guessKind(nm, mm)
+                            // หมายเหตุ: การเปิดอ่านจริงของบางเอกสารอาจถูกระบบบล็อกตามสิทธิ์ — เราแค่แสดงรายการไว้ก่อน
+                            out += Item(u, nm, mm, sz, v, kind, c.getInt(trash) == 1)
+                            processed++
+                            report(progress, processed, expected, "Scanning documents")
+                            if (cancelled?.invoke() == true) break
+                        }
+                    }
+                } catch (_: SecurityException) {
+                    // อุปกรณ์/สิทธิ์ไม่อนุญาต เข้าถึงตาราง Files — ข้ามแบบเงียบ ๆ
                 }
             }
         }
         out
     }
 
-    private suspend fun listFromTree(treeUri: Uri): List<Item> = withContext(Dispatchers.IO) {
-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext emptyList()
-        val acc = mutableListOf<Item>()
-        fun walk(dir: DocumentFile) {
-            dir.listFiles().forEach { f ->
-                if (f.isDirectory) walk(f) else acc += Item(
-                    uri = f.uri,
-                    name = f.name ?: "",
-                    mime = f.type,
-                    size = f.length(),
-                    volumeId = extractVolumeId(f.uri),
-                    kind = guessKind(f.name ?: "", f.type),
-                    isTrashed = false
-                )
+    // ใช้นับคร่าว ๆ ของ Files table (ถ้า query ได้) เพื่อประเมิน expected
+    private fun countFilesTableRough(volume: String, includeTrash: Boolean): Int {
+        return try {
+            val resolver = context.contentResolver
+            val filesUri = MediaStore.Files.getContentUri(volume)
+            val selDocs = buildString {
+                append("(")
+                append("${MediaStore.MediaColumns.MIME_TYPE} LIKE 'application/%'")
+                append(" OR ${MediaStore.MediaColumns.MIME_TYPE} LIKE 'text/%'")
+                append(")")
+                if (!includeTrash) append(" AND ${MediaStore.MediaColumns.IS_TRASHED}=0")
+                append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'image/%'")
+                append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'video/%'")
+                append(" AND ${MediaStore.MediaColumns.MIME_TYPE} NOT LIKE 'audio/%'")
             }
-        }
-        walk(root)
-        acc
+            resolver.query(filesUri, arrayOf(MediaStore.MediaColumns._ID), selDocs, null, null)?.use { it.count } ?: 0
+        } catch (_: Throwable) { 0 }
     }
 
+    private fun report(cb: ProgressCallback?, processed: Int, expected: Int, note: String) {
+        cb?.invoke(((processed * 100f) / expected).toInt().coerceIn(0, 100), processed, expected, note)
+    }
+
+    // ---------- Probes ----------
     suspend fun detectCorruption(item: Item): CorruptReport? = withContext(Dispatchers.IO) {
         try {
             when (item.kind) {
@@ -140,13 +257,6 @@ class RecoverEasyEngine(private val context: Context) {
             }
         } catch (_: Throwable) { CorruptReport(item, "ข้อผิดพลาดขณะตรวจสอบ", false) }
     }
-
-    data class CorruptReport(
-        val item: Item,
-        val reason: String,
-        val fixable: Boolean,
-        val volumeId: String? = item.volumeId
-    )
 
     private fun probeImage(uri: Uri) = runCatching {
         context.contentResolver.openInputStream(uri)?.use { ins ->
@@ -199,7 +309,11 @@ class RecoverEasyEngine(private val context: Context) {
         context.contentResolver.openInputStream(uri)?.use { ins ->
             ZipInputStream(BufferedInputStream(ins)).use { zis ->
                 var entries = 0; val buf = ByteArray(8192)
-                while (true) { val e = zis.nextEntry ?: break; entries++; while (zis.read(buf) > 0) {}; zis.closeEntry() }
+                while (true) {
+                    val e = zis.nextEntry ?: break; entries++
+                    while (zis.read(buf) > 0) {}
+                    zis.closeEntry()
+                }
                 entries >= 0
             }
         } ?: false
@@ -209,13 +323,14 @@ class RecoverEasyEngine(private val context: Context) {
         context.contentResolver.openInputStream(uri)?.use { it.read(ByteArray(1024)) >= 0 } ?: false
     }.getOrDefault(false)
 
+    // ---------- Repairs / Safe copy ----------
     suspend fun repairImageToJpeg(src: Uri, destDir: Uri): Uri? = withContext(Dispatchers.IO) {
         try {
             val name = (queryName(src) ?: "image").substringBeforeLast(".") + "_fixed.jpg"
             val outDoc = createDestFile(destDir, "image/jpeg", name) ?: return@withContext null
             val bmp = context.contentResolver.openInputStream(src)?.use { ins -> BitmapFactory.decodeStream(ins) } ?: return@withContext null
             context.contentResolver.openOutputStream(outDoc.uri)?.use { bmp.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-            context.contentResolver.openFileDescriptor(outDoc.uri, "rw")?.use { p -> Os.fsync(p.fileDescriptor) }
+            context.contentResolver.openFileDescriptor(outDoc.uri, "rw")?.use { pfd -> Os.fsync(pfd.fileDescriptor) }
             outDoc.uri
         } catch (_: Exception) { null }
     }
@@ -307,6 +422,7 @@ class RecoverEasyEngine(private val context: Context) {
         while (true) { val n = `in`.read(buf); if (n < 0) break; md.update(buf, 0, n); out.write(buf, 0, n) }
     }
 
+    // ---------- Utils ----------
     private fun queryName(uri: Uri): String? = context.contentResolver.query(
         uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null
     )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
@@ -338,5 +454,16 @@ class RecoverEasyEngine(private val context: Context) {
             n.endsWith(".zip") || n.endsWith(".rar") || n.endsWith(".7z") || n.endsWith(".tar") || n.endsWith(".gz") -> Kind.ARCHIVE
             else -> Kind.OTHER
         }
+    }
+
+    // นับไฟล์เพื่อ progress (รองรับ cancel)
+    private fun countFiles(dir: DocumentFile, cancelled: (() -> Boolean)?): Int {
+        if (cancelled?.invoke() == true) return 1
+        var c = 0
+        dir.listFiles().forEach { f ->
+            if (cancelled?.invoke() == true) return@forEach
+            c += if (f.isDirectory) countFiles(f, cancelled) else 1
+        }
+        return c
     }
 }

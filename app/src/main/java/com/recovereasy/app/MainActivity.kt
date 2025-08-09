@@ -1,4 +1,5 @@
 package com.recovereasy.app
+import com.recovereasy.app.BuildConfig
 
 import android.Manifest
 import android.content.ActivityNotFoundException

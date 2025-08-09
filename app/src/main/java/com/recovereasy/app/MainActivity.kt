@@ -1,5 +1,4 @@
 package com.recovereasy.app
-import com.recovereasy.app.BuildConfig
 
 import android.Manifest
 import android.content.ActivityNotFoundException
@@ -12,8 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
-import 
-com.recovereasy.app.BuildConfig
+import com.recovereasy.app.BuildConfig // <- สำคัญ: ให้ BuildConfig ใช้งานได้
 
 class MainActivity : AppCompatActivity() {
 
@@ -25,7 +23,7 @@ class MainActivity : AppCompatActivity() {
 
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* ถ้าไม่ได้สิทธิ์ ผู้ใช้กดซ้ำอีกครั้งได้ */ }
+    ) { /* ผู้ใช้ปฏิเสธสิทธิ์ได้ ให้กดซ้ำเพื่อขอใหม่ */ }
 
     private var pendingCopyIndices: IntArray? = null
     private val pickDest = registerForActivityResult(
@@ -34,10 +32,12 @@ class MainActivity : AppCompatActivity() {
         val idx = pendingCopyIndices
         pendingCopyIndices = null
         if (uri == null || idx == null) return@registerForActivityResult
+
         contentResolver.takePersistableUriPermission(
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
+
         lifecycleScope.launch {
             try {
                 var ok = 0
@@ -53,25 +53,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val pickFolder = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        uri ?: return@registerForActivityResult
+        contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        )
+        lifecycleScope.launch {
+            tvStatus.text = "Scanning folder..."
+            val list = engine.scanByFolderAllTypes(uri)
+            setItems(list)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         tvStatus = findViewById(R.id.tvStatus)
-        val sha   = runCatching { BuildConfig.GIT_SHA }.getOrElse { "local" }
-val runNo = runCatching { BuildConfig.BUILD_RUN }.getOrElse { "-" }
-tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
         listView = findViewById(R.id.listResults)
         listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
         adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf())
         listView.adapter = adapter
         engine = RecoverEasyEngine(this)
 
-        // ===== บรรทัดแสดงเวอร์ชัน/sha/เลขรอบ build =====
-        val sha   = runCatching { BuildConfig::class.java.getField("GIT_SHA").get(null) as String }.getOrElse { "local" }
-        val runNo = runCatching { BuildConfig::class.java.getField("BUILD_RUN").get(null).toString() }.getOrElse { "-" }
+        // --- บรรทัดยืนยันเวอร์ชัน/sha/เลขรอบ build ---
+        val sha = runCatching { BuildConfig.GIT_SHA }.getOrElse { "local" }
+        val runNo = runCatching { BuildConfig.BUILD_RUN }.getOrElse { "-" }
         tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
-        // ================================================
+        // ------------------------------------------------
 
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
@@ -96,6 +108,7 @@ tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
         }
 
         findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
+            // เลือกทั้งหมด
             for (i in 0 until adapter.count) listView.setItemChecked(i, true)
         }
 
@@ -117,21 +130,6 @@ tvStatus.text = "Ready. build ${BuildConfig.VERSION_NAME} ($sha) #$runNo"
                 ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
             pendingCopyIndices = idx
             pickDest.launch(null)
-        }
-    }
-
-    private val pickFolder = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        uri ?: return@registerForActivityResult
-        contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        )
-        lifecycleScope.launch {
-            tvStatus.text = "Scanning folder..."
-            val list = engine.scanByFolderAllTypes(uri)
-            setItems(list)
         }
     }
 

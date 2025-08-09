@@ -11,8 +11,16 @@ android {
     applicationId = "com.recovereasy.app"
     minSdk = 26
     targetSdk = 34
-    versionCode = 1
-    versionName = "1.0"
+
+    // ทำให้ทุก run ได้ version ใหม่อัตโนมัติ
+    val runNum = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+    versionCode = runNum
+    versionName = "1.0.$runNum"
+
+    // ฝัง metadata ไว้โชว์ในแอป
+    val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
+    buildConfigField("String", "GIT_SHA", "\"$sha\"")
+    buildConfigField("String", "BUILD_RUN", "\"$runNum\"")
   }
 
   buildTypes {

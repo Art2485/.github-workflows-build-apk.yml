@@ -3,7 +3,6 @@ package com.recovereasy.app
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -12,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import com.recovereasy.app.R
 
 class MainActivity : AppCompatActivity() {
 
@@ -79,20 +79,20 @@ class MainActivity : AppCompatActivity() {
         listView.adapter = adapter
         engine = RecoverEasyEngine(this)
 
-        // --- บรรทัดยืนยันเวอร์ชัน/sha/เลขรอบ build (ไม่ใช้ BuildConfig) ---
+        // --- แสดงเวอร์ชัน/sha/เลขรอบ build (ไม่พึ่ง BuildConfig) ---
         val versionName = runCatching {
             val pm = packageManager
-            val pi = if (Build.VERSION.SDK_INT >= 33)
-                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
-            else
-                @Suppress("DEPRECATION") pm.getPackageInfo(packageName, 0)
-            pi.versionName ?: "1.0"
-        }.getOrElse { "1.0" }
-
-        val sha = runCatching { getString(R.string.git_sha) }.getOrElse { "local" }
+            if (Build.VERSION.SDK_INT >= 33) {
+                pm.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(packageName, 0).versionName
+            }
+        }.getOrElse { "1.0" } ?: "1.0"
+        val sha   = runCatching { getString(R.string.git_sha) }.getOrElse { "local" }
         val runNo = runCatching { getString(R.string.build_run) }.getOrElse { "-" }
         tvStatus.text = "Ready. build $versionName ($sha) #$runNo"
-        // ----------------------------------------------------------------------
+        // -------------------------------------------------------------
 
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
@@ -117,7 +117,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
-            // เลือกทั้งหมด
+            // เลือกทั้งหมด (กดซ้ำ = ยกเลิกทั้งหมด ทำไว้ภายหลังได้)
             for (i in 0 until adapter.count) listView.setItemChecked(i, true)
         }
 

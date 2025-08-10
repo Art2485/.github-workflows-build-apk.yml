@@ -11,18 +11,19 @@
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:scaleType="centerCrop"
-        android:contentDescription="@string/untitled"
+        android:contentDescription="@null"
         android:src="@android:drawable/ic_menu_report_image" />
 
-    <!-- ใช้ CheckedTextView (id มาตรฐาน) เพื่อให้ ListView จัดการติ๊กได้ -->
+    <!-- ใช้ CheckedTextView กับ id มาตรฐานให้ ListView จัดการติ๊กได้ -->
     <CheckedTextView
         android:id="@android:id/text1"
-        style="?android:attr/listPreferredItemMultipleChoice"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_marginStart="12dp"
         android:layout_weight="1"
         android:maxLines="2"
         android:ellipsize="end"
-        android:text="File name"/>
+        android:padding="8dp"
+        android:checkMark="?android:attr/listChoiceIndicatorMultiple"
+        android:text="File name" />
 </LinearLayout>

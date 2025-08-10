@@ -15,9 +15,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-// ใช้ BuildConfig ที่เราฉีดค่า GIT_SHA/BUILD_RUN จาก build.gradle.kts
-import com.recovereasy.app.BuildConfig
-
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
@@ -25,27 +22,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var adapter: ArrayAdapter<String>
     private lateinit var engine: RecoverEasyEngine
 
-    // Progress UI
     private lateinit var progressGroup: LinearLayout
     private lateinit var progressBar: ProgressBar
     private lateinit var tvProgress: TextView
     private lateinit var btnCancel: Button
 
-    // Select-all toggle
     private lateinit var btnSelectAll: Button
     private var allSelected = false
 
-    // Filter
     private lateinit var spinnerFilter: Spinner
     private val allItems = mutableListOf<RecoverEasyEngine.Item>()
     private val shownItems = mutableListOf<RecoverEasyEngine.Item>()
 
-    // Jobs
     private var scanJob: Job? = null
     private var animateJob: Job? = null
     @Volatile private var cancelRequested = false
 
-    // Copy/Repair
     private var pendingCopyIndices: IntArray? = null
     private var pendingRepairIndices: IntArray? = null
 
@@ -84,10 +76,8 @@ class MainActivity : AppCompatActivity() {
                     repairIdx != null -> {
                         for (i in repairIdx) {
                             val it = shownItems[i]
-                            // ✅ เปลี่ยนเป็นส่ง Item (เดิมส่ง Uri แล้ว type mismatch)
-                            val out = runCatching {
-                                engine.repairBestEffort(it, uri)   // ถ้าไม่มีในเอ็นจิน จะ fallback ด้านล่าง
-                            }.getOrNull() ?: engine.safeCopyWithDigest(it.uri, uri, it.name)
+                            val out = runCatching { engine.repairBestEffort(it, uri) }.getOrNull()
+                                ?: engine.safeCopyWithDigest(it.uri, uri, it.name)
                             if (out != null) ok++
                         }
                         withContext(Dispatchers.Main) {
@@ -133,16 +123,14 @@ class MainActivity : AppCompatActivity() {
         spinnerFilter = findViewById(R.id.spinnerFilter)
         setupFilter()
 
-        // ✅ ใช้ BuildConfig (ไม่ใช้ R.string)
+        // ❌ ไม่ใช้ BuildConfig แล้ว — แสดงเฉพาะเวอร์ชันแอพ
         val versionName = runCatching {
             if (Build.VERSION.SDK_INT >= 33)
                 packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
             else
                 @Suppress("DEPRECATION") packageManager.getPackageInfo(packageName, 0).versionName
         }.getOrElse { "1.0" } ?: "1.0"
-        val sha = BuildConfig.GIT_SHA
-        val runNo = BuildConfig.BUILD_RUN
-        tvStatus.text = "Ready. build $versionName ($sha) #$runNo"
+        tvStatus.text = "Ready. version $versionName"
 
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
@@ -156,7 +144,6 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
 
-        // Toggle select all
         btnSelectAll = findViewById(R.id.btnSelectAll)
         btnSelectAll.setOnClickListener {
             if (allSelected) {
@@ -203,7 +190,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ----------------- Scan with animated percent & ETA -----------------
+    // ---------- Scan + แถบเปอร์เซ็นต์ + ETA ----------
     private fun launchScan(title: String, block: suspend () -> List<RecoverEasyEngine.Item>) {
         cancelRequested = false
         scanJob?.cancel()
@@ -266,10 +253,9 @@ class MainActivity : AppCompatActivity() {
         val ss = s % 60
         return "%d:%02d".format(m, ss)
     }
-    // -------------------------------------------------------------------
+    // ---------------------------------------------------
 
     private fun setupFilter() {
-        // ⚠️ ตัดตัวเลือก damaged/readonly ออก เพื่อไม่อ้างถึงฟิลด์ที่ไม่มี
         val choices = arrayOf(
             "All", "Images", "Videos", "Audio", "Documents", "Archives",
             "Trashed only", "Not trashed"

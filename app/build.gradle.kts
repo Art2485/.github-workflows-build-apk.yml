@@ -12,16 +12,15 @@ android {
         minSdk = 26
         targetSdk = 34
 
-        // ใช้เลขรอบและ SHA จาก GitHub Actions (ถ้าไม่มี ให้ fallback)
+        // ทำให้ทุก run ได้ version ใหม่อัตโนมัติ
         val runNum = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
-
         versionCode = runNum
         versionName = "1.0.$runNum"
 
-        // ส่งค่าเข้า resource string เพื่อให้ MainActivity เรียกผ่าน R.string.*
-        resValue("string", "git_sha", "\"$sha\"")
-        resValue("string", "build_run", "\"$runNum\"")
+        // metadata โชว์ในแอพ
+        val sha = (System.getenv("GITHUB_SHA") ?: "local").take(7)
+        buildConfigField("String", "GIT_SHA", "\"$sha\"")
+        buildConfigField("String", "BUILD_RUN", "\"$runNum\"")
     }
 
     buildTypes {
@@ -48,8 +47,9 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.9.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("androidx.documentfile:documentfile:1.0.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    // โหลดรูปแบบเบา ๆ + แคช
+    // แสดงรายการแบบลื่น ๆ
+    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    // โหลด thumbnail อย่างประหยัดแรม
     implementation("io.coil-kt:coil:2.6.0")
 }

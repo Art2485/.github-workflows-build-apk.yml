@@ -1,143 +1,92 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
-    android:padding="16dp"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:padding="16dp">
 
     <Button
         android:id="@+id/btnScanPhone"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="SCAN PHONE (ALL MEDIA + TRASH)"
-        android:layout_marginBottom="12dp"/>
+        android:text="SCAN PHONE (ALL MEDIA + TRASH)"/>
 
     <Button
         android:id="@+id/btnScanRemovable"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"
-        android:layout_marginBottom="12dp"/>
+        android:layout_marginTop="12dp"/>
 
     <Button
         android:id="@+id/btnPickFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="SCAN BY FOLDER (ALL TYPES)"
-        android:layout_marginBottom="12dp"/>
+        android:layout_marginTop="12dp"/>
 
-    <!-- ตัวกรองผลลัพธ์ -->
+    <!-- แถว Filter -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:layout_marginBottom="8dp">
+        android:layout_marginTop="16dp"
+        android:gravity="center_vertical">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Filter:"
-            android:layout_marginRight="8dp"/>
+            android:textSize="16sp"
+            android:layout_marginEnd="12dp"/>
 
         <Spinner
             android:id="@+id/spinnerFilter"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content" />
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
     </LinearLayout>
 
-    <!-- แถวคำสั่ง -->
+    <!-- ปุ่มแถวล่าง -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:weightSum="4"
-        android:layout_marginBottom="8dp">
+        android:layout_marginTop="8dp"
+        android:weightSum="3">
 
         <Button
             android:id="@+id/btnSelectAll"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="SELECT ALL" />
+            android:layout_height="wrap_content"
+            android:text="SELECT ALL"/>
 
         <Button
             android:id="@+id/btnPreview"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="PREVIEW" />
-
-        <Button
-            android:id="@+id/btnRepair"
-            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="REPAIR" />
+            android:text="PREVIEW"
+            android:layout_marginStart="8dp"/>
 
         <Button
             android:id="@+id/btnCopy"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="COPY SELECTED" />
-    </LinearLayout>
-
-    <!-- แถบสถานะความคืบหน้า + ยกเลิก -->
-    <LinearLayout
-        android:id="@+id/progressGroup"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:visibility="gone"
-        android:layout_marginBottom="8dp">
-
-        <ProgressBar
-            android:id="@+id/progressBar"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="10dp"
-            android:max="100"
-            android:progress="0"
-            android:indeterminate="true" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginTop="6dp">
-
-            <TextView
-                android:id="@+id/tvProgress"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Scanning..."
-                android:textSize="14sp" />
-
-            <Button
-                android:id="@+id/btnCancel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="CANCEL" />
-        </LinearLayout>
+            android:text="COPY SELECTED"
+            android:layout_marginStart="8dp"/>
     </LinearLayout>
 
-    <!-- รายการผลลัพธ์ -->
-    <ListView
-        android:id="@+id/listResults"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:choiceMode="multipleChoice" />
-
-    <!-- สถานะท้ายจอ -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Ready."
-        android:textSize="16sp"
-        android:layout_marginTop="10dp"/>
+        android:layout_marginTop="8dp"/>
+
+    <ListView
+        android:id="@+id/listResults"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="8dp"
+        android:layout_weight="1"
+        android:choiceMode="multipleChoice" />
 </LinearLayout>

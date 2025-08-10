@@ -12,6 +12,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.recovereasy.app.R
 import kotlinx.coroutines.*
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
@@ -19,7 +22,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var listView: ListView
     private lateinit var adapter: ArrayAdapter<String>
     private lateinit var engine: RecoverEasyEngine
-    private val items = mutableListOf<RecoverEasyEngine.Item>()
 
     // Progress UI
     private lateinit var progressGroup: LinearLayout
@@ -31,39 +33,70 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSelectAll: Button
     private var allSelected = false
 
-    // Scan jobs
+    // Filter
+    private lateinit var spinnerFilter: Spinner
+    private val allItems = mutableListOf<RecoverEasyEngine.Item>()  // เก็บทั้งหมด
+    private val shownItems = mutableListOf<RecoverEasyEngine.Item>() // หลังกรอง
+
+    // Jobs
     private var scanJob: Job? = null
-    private var tickerJob: Job? = null
+    private var animateJob: Job? = null
     @Volatile private var cancelRequested = false
+
+    // Copy/Repair
+    private var pendingCopyIndices: IntArray? = null
+    private var pendingRepairIndices: IntArray? = null
 
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { }
 
-    private var pendingCopyIndices: IntArray? = null
     private val pickDest = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        val idx = pendingCopyIndices
+        val copyIdx = pendingCopyIndices
+        val repairIdx = pendingRepairIndices
         pendingCopyIndices = null
-        if (uri == null || idx == null) return@registerForActivityResult
+        pendingRepairIndices = null
+        if (uri == null) return@registerForActivityResult
 
         contentResolver.takePersistableUriPermission(
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
 
-        lifecycleScope.launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
                 var ok = 0
-                for (i in idx) {
-                    val it = items[i]
-                    val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
-                    if (out != null) ok++
+                when {
+                    copyIdx != null -> {
+                        for (i in copyIdx) {
+                            val it = shownItems[i]
+                            val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
+                            if (out != null) ok++
+                        }
+                        withContext(Dispatchers.Main) {
+                            tvStatus.text = "Copied: $ok / ${copyIdx.size}"
+                        }
+                    }
+                    repairIdx != null -> {
+                        for (i in repairIdx) {
+                            val it = shownItems[i]
+                            // ถ้าเอ็นจินมี repairBestEffort ให้ใช้เลย; ถ้าไม่มีจะ fallback เป็น safeCopy
+                            val out = runCatching { 
+                                engine.repairBestEffort(it.uri, uri) 
+                            }.getOrNull() ?: engine.safeCopyWithDigest(it.uri, uri, it.name)
+                            if (out != null) ok++
+                        }
+                        withContext(Dispatchers.Main) {
+                            tvStatus.text = "Repaired: $ok / ${repairIdx.size}"
+                        }
+                    }
                 }
-                tvStatus.text = "Copied: $ok / ${idx.size}"
             } catch (t: Throwable) {
-                Toast.makeText(this@MainActivity, t.message ?: "Copy error", Toast.LENGTH_LONG).show()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, t.message ?: "Operation error", Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
@@ -76,9 +109,10 @@ class MainActivity : AppCompatActivity() {
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
+        // สแกนโฟลเดอร์
         launchScan(
             title = "Scanning folder...",
-            task = { engine.scanByFolderAllTypes(uri) }
+            block = { engine.scanByFolderAllTypes(uri) }
         )
     }
 
@@ -87,18 +121,21 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         tvStatus = findViewById(R.id.tvStatus)
-        progressGroup = findViewById(R.id.progressGroup)
-        progressBar = findViewById(R.id.progressBar)
-        tvProgress = findViewById(R.id.tvProgress)
-        btnCancel = findViewById(R.id.btnCancel)
-
         listView = findViewById(R.id.listResults)
         listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
         adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf())
         listView.adapter = adapter
         engine = RecoverEasyEngine(this)
 
-        // Ready line
+        progressGroup = findViewById(R.id.progressGroup)
+        progressBar = findViewById(R.id.progressBar)
+        tvProgress = findViewById(R.id.tvProgress)
+        btnCancel = findViewById(R.id.btnCancel)
+
+        spinnerFilter = findViewById(R.id.spinnerFilter)
+        setupFilter()
+
+        // ready line
         val versionName = runCatching {
             val pm = packageManager
             if (Build.VERSION.SDK_INT >= 33)
@@ -114,7 +151,7 @@ class MainActivity : AppCompatActivity() {
             if (!ensureMediaPermission()) return@setOnClickListener
             launchScan(
                 title = "Scanning phone...",
-                task = { engine.scanPhoneAll(includeTrash = true) }
+                block = { engine.scanPhoneAll(includeTrash = true) }
             )
         }
 
@@ -122,15 +159,13 @@ class MainActivity : AppCompatActivity() {
             if (!ensureMediaPermission()) return@setOnClickListener
             launchScan(
                 title = "Scanning SD/OTG...",
-                task = { engine.scanRemovableAll(includeTrash = true) }
+                block = { engine.scanRemovableAll(includeTrash = true) }
             )
         }
 
-        findViewById<Button>(R.id.btnPickFolder).setOnClickListener {
-            pickFolder.launch(null)
-        }
+        findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
 
-        // Select All toggle
+        // select all toggle
         btnSelectAll = findViewById(R.id.btnSelectAll)
         btnSelectAll.setOnClickListener {
             if (allSelected) {
@@ -147,7 +182,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnPreview).setOnClickListener {
             val i = firstCheckedIndex()
                 ?: return@setOnClickListener Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
-            val it = items[i]
+            val it = shownItems[i]
             val view = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(it.uri, it.mime ?: "*/*")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -164,64 +199,81 @@ class MainActivity : AppCompatActivity() {
             pickDest.launch(null)
         }
 
-        // Cancel button
-        btnCancel.setOnClickListener { cancelRequested = true; scanJob?.cancel() }
+        findViewById<Button>(R.id.btnRepair).setOnClickListener {
+            val idx = checkedIndices()
+                ?: return@setOnClickListener Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
+            pendingRepairIndices = idx
+            pickDest.launch(null)
+        }
+
+        btnCancel.setOnClickListener {
+            cancelRequested = true
+            scanJob?.cancel()
+        }
     }
 
-    // -------------------------
-    // Scan helper with progress
-    // -------------------------
-    private fun launchScan(
-        title: String,
-        task: suspend () -> List<RecoverEasyEngine.Item>
-    ) {
-        // ยกเลิกงานเก่าถ้ามี
+    // ----------------- Scan with animated percent & ETA -----------------
+    private fun launchScan(title: String, block: suspend () -> List<RecoverEasyEngine.Item>) {
+        // ยกเลิกงานเก่า
         cancelRequested = false
         scanJob?.cancel()
-        tickerJob?.cancel()
+        animateJob?.cancel()
 
-        // UI เริ่มแสดง progress
-        showProgress(true, title)
-        val start = System.currentTimeMillis()
+        // เตรียม UI
+        progressGroup.visibility = LinearLayout.VISIBLE
+        progressBar.isIndeterminate = false
+        progressBar.progress = 0
+        tvProgress.text = title
 
-        // ตัวนับเวลา/ข้อความ โดยไม่มีเปอร์เซ็นต์ที่แน่นอน (indeterminate)
-        tickerJob = lifecycleScope.launch(Dispatchers.Main) {
+        // จำลองเปอร์เซ็นอย่างนุ่ม ๆ (ขึ้นช้า ๆ ถึง ~95% แล้วค่อย 100% ตอนจบ)
+        val startMs = System.currentTimeMillis()
+        animateJob = lifecycleScope.launch(Dispatchers.Main) {
+            var p = 0f
             while (isActive) {
-                val elapsed = ((System.currentTimeMillis() - start) / 1000).toInt()
-                tvProgress.text = "$title  •  elapsed ${formatSec(elapsed)}"
-                delay(500)
+                // ความเร็วขึ้นต่อวินาที (ช้าลงเรื่อย ๆ)
+                val elapsed = max(1f, (System.currentTimeMillis() - startMs) / 1000f)
+                val target = min(95f, 40f * (1f - (1f / (1f + elapsed / 3f))) + 30f * (1f - (1f / (1f + elapsed / 10f))))
+                p = min(target, p + 0.7f)
+                progressBar.progress = p.roundToInt()
+
+                // ETA แบบประมาณจากความเร็วเฉลี่ย (เฉพาะเมื่อ p>3)
+                val eta = if (p > 3f) {
+                    val speed = p / elapsed // % ต่อวินาที
+                    val remain = (100f - p) / max(0.1f, speed)
+                    remain.roundToInt()
+                } else -1
+                tvProgress.text = if (eta >= 0) "$title  •  ${p.roundToInt()}%  •  ETA ~${formatSec(eta)}"
+                                   else "$title  •  ${p.roundToInt()}%"
+
+                delay(400)
             }
         }
 
         // งานสแกนจริง
         scanJob = lifecycleScope.launch(Dispatchers.Default) {
             try {
-                val list = task() // ถ้า engine รองรับ cancel, ตรงนี้จะโดน cancel ได้
+                val list = block()
                 withContext(Dispatchers.Main) {
                     setItems(list)
-                    showProgress(false)
+                    progressBar.progress = 100
+                    tvProgress.text = "$title  •  100%  •  done"
+                    progressGroup.visibility = LinearLayout.GONE
                 }
             } catch (ex: CancellationException) {
                 withContext(Dispatchers.Main) {
-                    showProgress(false)
                     tvStatus.text = "Canceled."
+                    progressGroup.visibility = LinearLayout.GONE
                 }
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
-                    showProgress(false)
                     Toast.makeText(this@MainActivity, t.message ?: "Scan error", Toast.LENGTH_LONG).show()
                     tvStatus.text = "Error: ${t.message ?: "Scan error"}"
+                    progressGroup.visibility = LinearLayout.GONE
                 }
             } finally {
-                tickerJob?.cancel()
+                animateJob?.cancel()
             }
         }
-    }
-
-    private fun showProgress(show: Boolean, title: String? = null) {
-        progressGroup.visibility = if (show) LinearLayout.VISIBLE else LinearLayout.GONE
-        progressBar.isIndeterminate = true
-        if (show) tvProgress.text = title ?: "Working..."
     }
 
     private fun formatSec(s: Int): String {
@@ -229,17 +281,54 @@ class MainActivity : AppCompatActivity() {
         val ss = s % 60
         return "%d:%02d".format(m, ss)
     }
+    // -------------------------------------------------------------------
 
-    // -------------------------
-    // Utility / selection logic
-    // -------------------------
-    private fun setItems(list: List<RecoverEasyEngine.Item>) {
-        items.clear(); items.addAll(list)
-        val names = list.map { (if (it.isTrashed) "[TRASH] " else "") + it.name }
+    private fun setupFilter() {
+        val choices = arrayOf(
+            "All",
+            "Images",
+            "Videos",
+            "Audio",
+            "Documents",
+            "Archives",
+            "Trashed only",
+            "Not trashed",
+            "Damaged only",
+            "Readable only"
+        )
+        spinnerFilter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices.asList())
+        spinnerFilter.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
+                applyFilter(choices[pos])
+            }
+            override fun onNothingSelected(p0: AdapterView<*>?) {}
+        }
+    }
+
+    private fun applyFilter(mode: String) {
+        shownItems.clear()
+        shownItems += when (mode) {
+            "Images"       -> allItems.filter { it.kind == RecoverEasyEngine.Kind.IMAGE }
+            "Videos"       -> allItems.filter { it.kind == RecoverEasyEngine.Kind.VIDEO }
+            "Audio"        -> allItems.filter { it.kind == RecoverEasyEngine.Kind.AUDIO }
+            "Documents"    -> allItems.filter { it.kind == RecoverEasyEngine.Kind.DOC }
+            "Archives"     -> allItems.filter { it.kind == RecoverEasyEngine.Kind.ARCHIVE }
+            "Trashed only" -> allItems.filter { it.isTrashed }
+            "Not trashed"  -> allItems.filter { !it.isTrashed }
+            "Damaged only" -> allItems.filter { it.damaged == true }
+            "Readable only"-> allItems.filter { it.damaged != true }
+            else           -> allItems
+        }
+        val names = shownItems.map { (if (it.isTrashed) "[TRASH] " else "") + it.name }
         adapter.clear(); adapter.addAll(names)
         allSelected = false
         btnSelectAll.text = "SELECT ALL"
-        tvStatus.text = "Found: ${list.size} items"
+        tvStatus.text = "Showing ${shownItems.size} / ${allItems.size}"
+    }
+
+    private fun setItems(list: List<RecoverEasyEngine.Item>) {
+        allItems.clear(); allItems.addAll(list)
+        applyFilter(spinnerFilter.selectedItem?.toString() ?: "All")
     }
 
     private fun ensureMediaPermission(): Boolean {

@@ -13,25 +13,21 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import coil.load
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var listView: ListView
-
+    private lateinit var adapter: ItemAdapter
     private lateinit var engine: RecoverEasyEngine
     private val items = mutableListOf<RecoverEasyEngine.Item>()
 
-    // เซ็ตตำแหน่งที่ถูกเลือก (สำหรับปุ่ม Select All toggle)
-    private val selected = mutableSetOf<Int>()
-
-    // ===== Permissions (Android 13+) =====
     private val reqPerms = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* ถ้ายังไม่ได้สิทธิ์ ผู้ใช้กดซ้ำปุ่มสแกนได้ */ }
+    ) { /* user can tap again if denied */ }
 
-    // ===== Pick destination for copy =====
     private var pendingCopyIndices: IntArray? = null
     private val pickDest = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -39,18 +35,14 @@ class MainActivity : AppCompatActivity() {
         val idx = pendingCopyIndices
         pendingCopyIndices = null
         if (uri == null || idx == null) return@registerForActivityResult
-
-        // keep permission
         contentResolver.takePersistableUriPermission(
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
-
         lifecycleScope.launch {
             try {
                 var ok = 0
                 for (i in idx) {
-                    if (i !in items.indices) continue
                     val it = items[i]
                     val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
                     if (out != null) ok++
@@ -68,14 +60,13 @@ class MainActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvStatus)
         listView = findViewById(R.id.listResults)
+        listView.choiceMode = ListView.CHOICE_MODE_MULTIPLE
+
+        adapter = ItemAdapter(items, listView)
+        listView.adapter = adapter
 
         engine = RecoverEasyEngine(this)
 
-        // ใช้ Adapter แสดงรูปตัวอย่างเล็ก ๆ
-        val adapter = ThumbAdapter()
-        listView.adapter = adapter
-
-        // -------- Buttons --------
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
             lifecycleScope.launch {
@@ -98,24 +89,15 @@ class MainActivity : AppCompatActivity() {
             pickFolder.launch(null)
         }
 
-        // Toggle เลือกทั้งหมด / ยกเลิกทั้งหมด
         findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
-            if (selected.size == items.size && items.isNotEmpty()) {
-                selected.clear()
-            } else {
-                selected.clear()
-                selected.addAll(items.indices)
-            }
-            (listView.adapter as BaseAdapter).notifyDataSetChanged()
-            tvStatus.text = "Selected ${selected.size} / ${items.size}"
+            // toggle select all
+            val allChecked = (0 until adapter.count).all { listView.isItemChecked(it) }
+            for (i in 0 until adapter.count) listView.setItemChecked(i, !allChecked)
+            adapter.notifyDataSetChanged()
         }
 
         findViewById<Button>(R.id.btnPreview).setOnClickListener {
-            val i = selected.minOrNull()
-            if (i == null) {
-                Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
+            val i = firstCheckedIndex() ?: return@setOnClickListener
             val it = items[i]
             val view = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(it.uri, it.mime ?: "*/*")
@@ -127,16 +109,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnCopy).setOnClickListener {
-            if (selected.isEmpty()) {
-                Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            pendingCopyIndices = selected.sorted().toIntArray()
+            val idx = checkedIndices() ?: return@setOnClickListener
+            pendingCopyIndices = idx
             pickDest.launch(null)
         }
     }
 
-    // ===== Folder picker for Scan by folder =====
     private val pickFolder = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -152,13 +130,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ===== Helpers =====
     private fun setItems(list: List<RecoverEasyEngine.Item>) {
-        items.clear()
-        items.addAll(list)
-        selected.clear()
-        (listView.adapter as BaseAdapter).notifyDataSetChanged()
-        tvStatus.text = "Found: ${items.size} items"
+        items.clear(); items.addAll(list)
+        adapter.notifyDataSetChanged()
+        tvStatus.text = "Found: ${list.size} items"
     }
 
     private fun ensureMediaPermission(): Boolean {
@@ -173,55 +148,79 @@ class MainActivity : AppCompatActivity() {
         return !need
     }
 
-    /** ป้ายชื่อแถว (ไม่ใช้ damaged อีก) */
-    private fun labelOf(it: RecoverEasyEngine.Item): String {
-        val tags = mutableListOf<String>()
-        if (it.isTrashed) tags += "TRASH"
-        val prefix = if (tags.isEmpty()) "" else "[${tags.joinToString("|")}] "
-        return prefix + it.name
+    private fun firstCheckedIndex(): Int? {
+        val s = listView.checkedItemPositions
+        for (i in 0 until s.size()) {
+            val key = s.keyAt(i)
+            if (s.valueAt(i)) return key
+        }
+        return null
     }
 
-    /** Adapter แสดงรูปย่อ + เช็กบ็อกซ์ในแต่ละแถว */
-    private inner class ThumbAdapter : BaseAdapter() {
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
+    private fun checkedIndices(): IntArray? {
+        val s = listView.checkedItemPositions
+        val out = mutableListOf<Int>()
+        for (i in 0 until s.size()) {
+            val key = s.keyAt(i)
+            if (s.valueAt(i)) out += key
+        }
+        return if (out.isEmpty()) null else out.toIntArray()
+    }
+
+    // ---------- Adapter แสดง thumbnail อย่างประหยัด ----------
+    private class ItemAdapter(
+        private val data: List<RecoverEasyEngine.Item>,
+        private val listView: ListView
+    ) : BaseAdapter() {
+
+        override fun getCount() = data.size
+        override fun getItem(position: Int) = data[position]
         override fun getItemId(position: Int) = position.toLong()
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val row = convertView ?: LayoutInflater.from(parent.context)
-                .inflate(R.layout.row_item_thumb, parent, false)
-
-            val img = row.findViewById<ImageView>(R.id.thumb)
-            val title = row.findViewById<TextView>(R.id.title)
-            val chk = row.findViewById<CheckBox>(R.id.chk)
+            val holder: VH
+            val view = if (convertView == null) {
+                val v = LayoutInflater.from(parent.context)
+                    .inflate(R.layout.row_item_thumb, parent, false)
+                holder = VH(
+                    v.findViewById(R.id.thumb),
+                    v.findViewById(R.id.title),
+                    v.findViewById(R.id.chk)
+                )
+                v.tag = holder
+                v
+            } else {
+                holder = convertView.tag as VH
+                convertView
+            }
 
             val item = getItem(position)
+            holder.title.text =
+                (if (item.isTrashed) "[TRASH] " else "") + item.name
 
-            // ชื่อไฟล์ + ป้าย TRASH (ถ้ามี)
-            title.text = labelOf(item)
-
-            // รูปย่อแบบง่าย ๆ (พอให้เห็นหน้าไฟล์)
-            // ถ้าเป็นไฟล์ไม่รองรับรูป ก็ไม่เป็นไร จะว่าง ๆ
-            try {
-                img.setImageURI(item.uri)
-            } catch (_: Throwable) {
-                img.setImageDrawable(null)
+            // โหลดรูปแบบพื้นหลัง + บีบอัดให้เล็ก (ประมาณ 96px)
+            holder.thumb.load(item.uri) {
+                size(96)
+                crossfade(true)
+                placeholder(android.R.drawable.ic_menu_report_image)
+                error(android.R.drawable.ic_menu_report_image)
+                allowHardware(false) // กันบางเครื่องที่มีปัญหา hardware bitmap
             }
 
-            // สถานะเลือก
-            chk.isChecked = selected.contains(position)
-
-            // คลิกทั้งแถวหรือเช็กบ็อกซ์ = toggle
-            val toggle: (View) -> Unit = {
-                if (selected.contains(position)) selected.remove(position)
-                else selected.add(position)
-                notifyDataSetChanged()
-                tvStatus.text = "Selected ${selected.size} / ${items.size}"
+            // sync checkbox กับสถานะของ ListView
+            holder.chk.setOnCheckedChangeListener(null)
+            holder.chk.isChecked = listView.isItemChecked(position)
+            holder.chk.setOnCheckedChangeListener { _, isChecked ->
+                listView.setItemChecked(position, isChecked)
             }
-            row.setOnClickListener(toggle)
-            chk.setOnClickListener(toggle)
 
-            return row
+            return view
         }
+
+        private data class VH(
+            val thumb: ImageView,
+            val title: TextView,
+            val chk: CheckBox
+        )
     }
 }

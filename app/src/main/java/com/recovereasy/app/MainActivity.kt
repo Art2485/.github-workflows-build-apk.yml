@@ -10,11 +10,13 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import com.recovereasy.app.R
 import kotlinx.coroutines.*
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+
+// ใช้ BuildConfig ที่เราฉีดค่า GIT_SHA/BUILD_RUN จาก build.gradle.kts
+import com.recovereasy.app.BuildConfig
 
 class MainActivity : AppCompatActivity() {
 
@@ -35,8 +37,8 @@ class MainActivity : AppCompatActivity() {
 
     // Filter
     private lateinit var spinnerFilter: Spinner
-    private val allItems = mutableListOf<RecoverEasyEngine.Item>()  // เก็บทั้งหมด
-    private val shownItems = mutableListOf<RecoverEasyEngine.Item>() // หลังกรอง
+    private val allItems = mutableListOf<RecoverEasyEngine.Item>()
+    private val shownItems = mutableListOf<RecoverEasyEngine.Item>()
 
     // Jobs
     private var scanJob: Job? = null
@@ -82,9 +84,9 @@ class MainActivity : AppCompatActivity() {
                     repairIdx != null -> {
                         for (i in repairIdx) {
                             val it = shownItems[i]
-                            // ถ้าเอ็นจินมี repairBestEffort ให้ใช้เลย; ถ้าไม่มีจะ fallback เป็น safeCopy
-                            val out = runCatching { 
-                                engine.repairBestEffort(it.uri, uri) 
+                            // ✅ เปลี่ยนเป็นส่ง Item (เดิมส่ง Uri แล้ว type mismatch)
+                            val out = runCatching {
+                                engine.repairBestEffort(it, uri)   // ถ้าไม่มีในเอ็นจิน จะ fallback ด้านล่าง
                             }.getOrNull() ?: engine.safeCopyWithDigest(it.uri, uri, it.name)
                             if (out != null) ok++
                         }
@@ -109,11 +111,7 @@ class MainActivity : AppCompatActivity() {
             uri,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
-        // สแกนโฟลเดอร์
-        launchScan(
-            title = "Scanning folder...",
-            block = { engine.scanByFolderAllTypes(uri) }
-        )
+        launchScan("Scanning folder...") { engine.scanByFolderAllTypes(uri) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,37 +133,30 @@ class MainActivity : AppCompatActivity() {
         spinnerFilter = findViewById(R.id.spinnerFilter)
         setupFilter()
 
-        // ready line
+        // ✅ ใช้ BuildConfig (ไม่ใช้ R.string)
         val versionName = runCatching {
-            val pm = packageManager
             if (Build.VERSION.SDK_INT >= 33)
-                pm.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
+                packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
             else
-                @Suppress("DEPRECATION") pm.getPackageInfo(packageName, 0).versionName
+                @Suppress("DEPRECATION") packageManager.getPackageInfo(packageName, 0).versionName
         }.getOrElse { "1.0" } ?: "1.0"
-        val sha = runCatching { getString(R.string.git_sha) }.getOrElse { "local" }
-        val runNo = runCatching { getString(R.string.build_run) }.getOrElse { "-" }
+        val sha = BuildConfig.GIT_SHA
+        val runNo = BuildConfig.BUILD_RUN
         tvStatus.text = "Ready. build $versionName ($sha) #$runNo"
 
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
-            launchScan(
-                title = "Scanning phone...",
-                block = { engine.scanPhoneAll(includeTrash = true) }
-            )
+            launchScan("Scanning phone...") { engine.scanPhoneAll(includeTrash = true) }
         }
 
         findViewById<Button>(R.id.btnScanRemovable).setOnClickListener {
             if (!ensureMediaPermission()) return@setOnClickListener
-            launchScan(
-                title = "Scanning SD/OTG...",
-                block = { engine.scanRemovableAll(includeTrash = true) }
-            )
+            launchScan("Scanning SD/OTG...") { engine.scanRemovableAll(includeTrash = true) }
         }
 
         findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
 
-        // select all toggle
+        // Toggle select all
         btnSelectAll = findViewById(R.id.btnSelectAll)
         btnSelectAll.setOnClickListener {
             if (allSelected) {
@@ -214,31 +205,26 @@ class MainActivity : AppCompatActivity() {
 
     // ----------------- Scan with animated percent & ETA -----------------
     private fun launchScan(title: String, block: suspend () -> List<RecoverEasyEngine.Item>) {
-        // ยกเลิกงานเก่า
         cancelRequested = false
         scanJob?.cancel()
         animateJob?.cancel()
 
-        // เตรียม UI
         progressGroup.visibility = LinearLayout.VISIBLE
         progressBar.isIndeterminate = false
         progressBar.progress = 0
         tvProgress.text = title
 
-        // จำลองเปอร์เซ็นอย่างนุ่ม ๆ (ขึ้นช้า ๆ ถึง ~95% แล้วค่อย 100% ตอนจบ)
         val startMs = System.currentTimeMillis()
         animateJob = lifecycleScope.launch(Dispatchers.Main) {
             var p = 0f
             while (isActive) {
-                // ความเร็วขึ้นต่อวินาที (ช้าลงเรื่อย ๆ)
                 val elapsed = max(1f, (System.currentTimeMillis() - startMs) / 1000f)
                 val target = min(95f, 40f * (1f - (1f / (1f + elapsed / 3f))) + 30f * (1f - (1f / (1f + elapsed / 10f))))
                 p = min(target, p + 0.7f)
                 progressBar.progress = p.roundToInt()
 
-                // ETA แบบประมาณจากความเร็วเฉลี่ย (เฉพาะเมื่อ p>3)
                 val eta = if (p > 3f) {
-                    val speed = p / elapsed // % ต่อวินาที
+                    val speed = p / elapsed
                     val remain = (100f - p) / max(0.1f, speed)
                     remain.roundToInt()
                 } else -1
@@ -249,7 +235,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // งานสแกนจริง
         scanJob = lifecycleScope.launch(Dispatchers.Default) {
             try {
                 val list = block()
@@ -284,17 +269,10 @@ class MainActivity : AppCompatActivity() {
     // -------------------------------------------------------------------
 
     private fun setupFilter() {
+        // ⚠️ ตัดตัวเลือก damaged/readonly ออก เพื่อไม่อ้างถึงฟิลด์ที่ไม่มี
         val choices = arrayOf(
-            "All",
-            "Images",
-            "Videos",
-            "Audio",
-            "Documents",
-            "Archives",
-            "Trashed only",
-            "Not trashed",
-            "Damaged only",
-            "Readable only"
+            "All", "Images", "Videos", "Audio", "Documents", "Archives",
+            "Trashed only", "Not trashed"
         )
         spinnerFilter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices.asList())
         spinnerFilter.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
@@ -315,8 +293,6 @@ class MainActivity : AppCompatActivity() {
             "Archives"     -> allItems.filter { it.kind == RecoverEasyEngine.Kind.ARCHIVE }
             "Trashed only" -> allItems.filter { it.isTrashed }
             "Not trashed"  -> allItems.filter { !it.isTrashed }
-            "Damaged only" -> allItems.filter { it.damaged == true }
-            "Readable only"-> allItems.filter { it.damaged != true }
             else           -> allItems
         }
         val names = shownItems.map { (if (it.isTrashed) "[TRASH] " else "") + it.name }

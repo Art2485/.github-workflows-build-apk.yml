@@ -10,29 +10,49 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="SCAN PHONE (ALL MEDIA + TRASH)"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="12dp"/>
 
     <Button
         android:id="@+id/btnScanRemovable"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="12dp"/>
 
     <Button
         android:id="@+id/btnPickFolder"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="SCAN BY FOLDER (ALL TYPES)"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="12dp"/>
+
+    <!-- ตัวกรองผลลัพธ์ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Filter:"
+            android:layout_marginRight="8dp"/>
+
+        <Spinner
+            android:id="@+id/spinnerFilter"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
 
     <!-- แถวคำสั่ง -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:weightSum="3"
-        android:layout_marginBottom="12dp">
+        android:weightSum="4"
+        android:layout_marginBottom="8dp">
 
         <Button
             android:id="@+id/btnSelectAll"
@@ -49,6 +69,13 @@
             android:text="PREVIEW" />
 
         <Button
+            android:id="@+id/btnRepair"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="REPAIR" />
+
+        <Button
             android:id="@+id/btnCopy"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -63,13 +90,13 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:visibility="gone"
-        android:layout_marginBottom="12dp">
+        android:layout_marginBottom="8dp">
 
         <ProgressBar
             android:id="@+id/progressBar"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="8dp"
+            android:layout_height="10dp"
             android:max="100"
             android:progress="0"
             android:indeterminate="true" />
@@ -79,7 +106,7 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginTop="8dp">
+            android:layout_marginTop="6dp">
 
             <TextView
                 android:id="@+id/tvProgress"
@@ -112,5 +139,5 @@
         android:layout_height="wrap_content"
         android:text="Ready."
         android:textSize="16sp"
-        android:layout_marginTop="12dp"/>
+        android:layout_marginTop="10dp"/>
 </LinearLayout>

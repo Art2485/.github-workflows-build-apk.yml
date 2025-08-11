@@ -1,92 +1,117 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent"
-    android:padding="16dp">
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
+    <!-- ปุ่มสแกน -->
     <Button
         android:id="@+id/btnScanPhone"
+        android:text="SCAN PHONE (ALL MEDIA + TRASH)"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="SCAN PHONE (ALL MEDIA + TRASH)"/>
+        android:layout_height="wrap_content"/>
+
+    <Space android:layout_width="0dp" android:layout_height="12dp"/>
 
     <Button
         android:id="@+id/btnScanRemovable"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"
-        android:layout_marginTop="12dp"/>
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
+
+    <Space android:layout_width="0dp" android:layout_height="12dp"/>
 
     <Button
         android:id="@+id/btnPickFolder"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
         android:text="SCAN BY FOLDER (ALL TYPES)"
-        android:layout_marginTop="12dp"/>
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
 
-    <!-- แถว Filter -->
+    <Space android:layout_width="0dp" android:layout_height="16dp"/>
+
+    <!-- แถว Filter + ปุ่มต่าง ๆ -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:gravity="center_vertical">
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Filter:"
-            android:textSize="16sp"
-            android:layout_marginEnd="12dp"/>
+            android:textStyle="bold"
+            android:paddingEnd="12dp"/>
 
         <Spinner
             android:id="@+id/spinnerFilter"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"/>
+            android:layout_weight="1"
+            android:spinnerMode="dropdown" />
     </LinearLayout>
 
-    <!-- ปุ่มแถวล่าง -->
+    <Space android:layout_width="0dp" android:layout_height="12dp"/>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:weightSum="3">
+        android:gravity="center"
+        android:weightSum="4"
+        android:orientation="horizontal">
 
         <Button
             android:id="@+id/btnSelectAll"
+            android:text="SELECT ALL"
             android:layout_width="0dp"
-            android:layout_weight="1"
             android:layout_height="wrap_content"
-            android:text="SELECT ALL"/>
+            android:layout_weight="1"/>
+
+        <Space android:layout_width="8dp" android:layout_height="0dp"/>
 
         <Button
             android:id="@+id/btnPreview"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
             android:text="PREVIEW"
-            android:layout_marginStart="8dp"/>
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
+
+        <Space android:layout_width="8dp" android:layout_height="0dp"/>
+
+        <Button
+            android:id="@+id/btnRepair"
+            android:text="REPAIR"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
+
+        <Space android:layout_width="8dp" android:layout_height="0dp"/>
 
         <Button
             android:id="@+id/btnCopy"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
             android:text="COPY SELECTED"
-            android:layout_marginStart="8dp"/>
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"/>
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Ready."
-        android:layout_marginTop="8dp"/>
+    <Space android:layout_width="0dp" android:layout_height="12dp"/>
 
-    <ListView
-        android:id="@+id/listResults"
+    <!-- รายการผลลัพธ์เป็น RecyclerView เพื่อไม่เด้งและลื่น -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recycler"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="8dp"
         android:layout_weight="1"
-        android:choiceMode="multipleChoice" />
+        android:descendantFocusability="blocksDescendants"/>
+
+    <Space android:layout_width="0dp" android:layout_height="8dp"/>
+
+    <!-- สถานะ/เปอร์เซ็นต์ -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:text="Ready."
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
 </LinearLayout>

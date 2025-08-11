@@ -1,24 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="horizontal" android:padding="8dp"
-    android:layout_width="match_parent" android:layout_height="72dp">
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="?android:listPreferredItemHeightLarge"
+    android:padding="12dp">
 
     <ImageView
         android:id="@+id/imgThumb"
-        android:layout_width="56dp" android:layout_height="56dp"
-        android:scaleType="centerCrop" android:contentDescription="@null"
-        android:src="@android:drawable/ic_menu_report_image"/>
-
-    <Space android:layout_width="12dp" android:layout_height="0dp"/>
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="@null" />
 
     <TextView
-        android:id="@+id/tvName"
-        android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-        android:gravity="center_vertical" android:maxLines="2" android:ellipsize="end"
-        android:text="filename.ext"/>
+        android:id="@+id/txtName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_toEndOf="@id/imgThumb"
+        android:layout_toRightOf="@id/imgThumb"
+        android:layout_alignTop="@id/imgThumb"
+        android:layout_marginStart="12dp"
+        android:layout_marginRight="64dp"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:text="filename.ext" />
 
     <CheckBox
-        android:id="@+id/cb"
-        android:layout_width="wrap_content" android:layout_height="match_parent"
-        android:gravity="center"/>
-</LinearLayout>
+        android:id="@+id/chk"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentEnd="true"
+        android:layout_centerVertical="true" />
+</RelativeLayout>

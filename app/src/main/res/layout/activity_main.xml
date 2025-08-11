@@ -1,87 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical" android:padding="16dp"
-    android:layout_width="match_parent" android:layout_height="match_parent">
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
-    <!-- สแกนหลัก -->
-    <Button android:id="@+id/btnScanPhone"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="SCAN PHONE (ALL MEDIA + TRASH)"/>
+    <!-- ปุ่มสแกน -->
+    <Button
+        android:id="@+id/btnScanPhone"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SCAN PHONE (ALL MEDIA + TRASH)" />
 
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <Button android:id="@+id/btnScanRemovable"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"/>
+    <Button
+        android:id="@+id/btnScanRemovable"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SCAN SD/OTG (ALL MEDIA + TRASH)"
+        android:layout_marginTop="12dp" />
 
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <Button android:id="@+id/btnPickFolder"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="SCAN BY FOLDER (ALL TYPES)"/>
+    <Button
+        android:id="@+id/btnPickFolder"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SCAN BY FOLDER (ALL TYPES)"
+        android:layout_marginTop="12dp" />
 
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <Button android:id="@+id/btnScanAppCaches"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="SCAN APP CACHES (Android/media/*)"/>
+    <!-- แถบปุ่มเครื่องมือ -->
+    <LinearLayout
+        android:orientation="horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp">
 
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <Button android:id="@+id/btnOpenGalleryTrash"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="OPEN GALLERY TRASH (Samsung)"/>
+        <Button
+            android:id="@+id/btnSelectAll"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="SELECT ALL" />
 
-    <!-- แถว Filter -->
-    <Space android:layout_width="0dp" android:layout_height="12dp"/>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:gravity="center_vertical">
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Filter:" android:textStyle="bold" android:paddingEnd="12dp"/>
-        <Spinner android:id="@+id/spinnerFilter"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/>
+        <Button
+            android:id="@+id/btnPreview"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="PREVIEW"
+            android:layout_marginStart="8dp" />
+
+        <Button
+            android:id="@+id/btnRepair"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="REPAIR"
+            android:layout_marginStart="8dp" />
+
+        <Button
+            android:id="@+id/btnCopy"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="COPY SELECTED"
+            android:layout_marginStart="8dp" />
     </LinearLayout>
 
-    <!-- ปุ่มทำงานกับรายการ -->
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:weightSum="4">
-        <Button android:id="@+id/btnSelectAll"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="SELECT ALL"/>
-        <Space android:layout_width="8dp" android:layout_height="0dp"/>
-        <Button android:id="@+id/btnPreview"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="PREVIEW"/>
-        <Space android:layout_width="8dp" android:layout_height="0dp"/>
-        <Button android:id="@+id/btnRepair"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="REPAIR"/>
-        <Space android:layout_width="8dp" android:layout_height="0dp"/>
-        <Button android:id="@+id/btnCopy"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="COPY SELECTED"/>
-    </LinearLayout>
+    <!-- สถานะ -->
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Ready."
+        android:layout_marginTop="12dp" />
 
-    <!-- แถบความคืบหน้า + ยกเลิก -->
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:gravity="center_vertical">
-        <ProgressBar
-            android:id="@+id/progress"
-            style="@android:style/Widget.DeviceDefault.Light.ProgressBar.Horizontal"
-            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:max="100" android:progress="0"/>
-        <Space android:layout_width="8dp" android:layout_height="0dp"/>
-        <Button android:id="@+id/btnCancel"
-            android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="Cancel"/>
-    </LinearLayout>
-
-    <Space android:layout_width="0dp" android:layout_height="8dp"/>
-    <TextView android:id="@+id/tvStatus"
-        android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="Ready."/>
-
-    <!-- รายการ -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recycler"
-        android:layout_width="match_parent" android:layout_height="0dp"
-        android:layout_weight="1" android:descendantFocusability="blocksDescendants"/>
+    <!-- รายการไฟล์ -->
+    <ListView
+        android:id="@+id/listResults"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:choiceMode="multipleChoice" />
 </LinearLayout>

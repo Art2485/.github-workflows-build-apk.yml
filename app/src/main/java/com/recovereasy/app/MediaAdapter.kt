@@ -1,93 +1,96 @@
 package com.recovereasy.app
 
-import android.content.ContentResolver
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.content.Context
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
-import android.util.Size
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.CheckBox
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.recyclerview.widget.DiffUtil
-import androidx.recyclerview.widget.ListAdapter
-import androidx.recyclerview.widget.RecyclerView
-import kotlinx.coroutines.*
 
-class MediaAdapter(private val cr: ContentResolver)
-    : ListAdapter<RecoverEasyEngine.Item, MediaAdapter.VH>(DIFF) {
+/**
+ * อะแดปเตอร์แสดงรายการไฟล์พร้อมรูปย่อ (thumbnail) + เช็กบ็อกซ์
+ * ใช้กับ layout: row_item_thumb.xml (imgThumb, txtName, chk)
+ */
+class MediaAdapter(
+    context: Context,
+    private val items: List<RecoverEasyEngine.Item>,
+    private val checked: BooleanArray
+) : BaseAdapter() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val selected = linkedSetOf<String>() // เก็บคีย์เป็น uri string
+    private val inflater = LayoutInflater.from(context)
+    private val resolver = context.contentResolver
 
-    companion object {
-        private val DIFF = object : DiffUtil.ItemCallback<RecoverEasyEngine.Item>() {
-            override fun areItemsTheSame(o: RecoverEasyEngine.Item, n: RecoverEasyEngine.Item) = o.uri == n.uri
-            override fun areContentsTheSame(o: RecoverEasyEngine.Item, n: RecoverEasyEngine.Item) = o == n
+    private data class VH(
+        val imgThumb: ImageView,
+        val txtName: TextView,
+        val chk: CheckBox
+    )
+
+    override fun getCount(): Int = items.size
+    override fun getItem(position: Int): Any = items[position]
+    override fun getItemId(position: Int): Long = position.toLong()
+
+    override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+        val view: View
+        val holder: VH
+
+        if (convertView == null) {
+            view = inflater.inflate(R.layout.row_item_thumb, parent, false)
+            holder = VH(
+                imgThumb = view.findViewById(R.id.imgThumb),
+                txtName  = view.findViewById(R.id.txtName),
+                chk      = view.findViewById(R.id.chk)
+            )
+            view.tag = holder
+        } else {
+            view = convertView
+            holder = view.tag as VH
         }
-    }
 
-    inner class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val img: ImageView = v.findViewById(R.id.imgThumb)
-        val name: TextView = v.findViewById(R.id.tvName)
-        val cb: CheckBox = v.findViewById(R.id.cb)
-        var job: Job? = null
-        fun bind(item: RecoverEasyEngine.Item) {
-            val key = item.uri.toString()
-            name.text = (if (item.isTrashed) "[TRASH] " else "") + item.name
+        val it = items[position]
 
-            cb.setOnCheckedChangeListener(null)
-            cb.isChecked = selected.contains(key)
-            cb.setOnCheckedChangeListener { _, isChecked ->
-                if (isChecked) selected.add(key) else selected.remove(key)
-            }
-            itemView.setOnClickListener { cb.isChecked = !cb.isChecked }
-
-            img.setImageResource(android.R.drawable.ic_menu_report_image)
-            img.tag = key
-            job?.cancel()
-            job = scope.launch {
-                val bmp = withContext(Dispatchers.IO) { loadThumbSafe(item.uri) }
-                if (img.tag == key && bmp != null) img.setImageBitmap(bmp)
-            }
+        // ชื่อไฟล์ (ใส่ [TRASH] ถ้าอยู่ถังขยะ)
+        holder.txtName.text = buildString {
+            if (it.isTrashed) append("[TRASH] ")
+            append(it.name)
         }
-    }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-        val v = LayoutInflater.from(parent.context).inflate(R.layout.row_item_thumb, parent, false)
-        return VH(v)
-    }
-    override fun onBindViewHolder(h: VH, pos: Int) = h.bind(getItem(pos))
-
-    fun clearSelection() { selected.clear(); notifyDataSetChanged() }
-    fun setAllSelected(select: Boolean) {
-        if (select) currentList.forEach { selected.add(it.uri.toString()) } else selected.clear()
-        notifyDataSetChanged()
-    }
-    fun isAllSelected(): Boolean =
-        currentList.isNotEmpty() && currentList.all { selected.contains(it.uri.toString()) }
-    fun selectedItems(): List<RecoverEasyEngine.Item> =
-        currentList.filter { selected.contains(it.uri.toString()) }
-
-    private fun loadThumbSafe(uri: Uri): Bitmap? = try {
-        if (Build.VERSION.SDK_INT >= 29) cr.loadThumbnail(uri, Size(128, 128), null)
-        else cr.openInputStream(uri)?.use { input ->
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeStream(input, null, opts)
-            val sample = calcSample(opts.outWidth, opts.outHeight, 128, 128)
-            cr.openInputStream(uri)?.use { input2 ->
-                val o2 = BitmapFactory.Options().apply { inSampleSize = sample }
-                BitmapFactory.decodeStream(input2, null, o2)
-            }
+        // เช็กบ็อกซ์ตามสถานะในอาร์เรย์
+        holder.chk.setOnCheckedChangeListener(null)
+        holder.chk.isChecked = checked.getOrNull(position) == true
+        holder.chk.setOnCheckedChangeListener { _, isChecked ->
+            if (position in checked.indices) checked[position] = isChecked
         }
-    } catch (_: Throwable) { null }
 
-    private fun calcSample(w: Int, h: Int, reqW: Int, reqH: Int): Int {
-        var s = 1; var ww = w / 2; var hh = h / 2
-        while (ww / s >= reqW && hh / s >= reqH) s *= 2
-        return s
+        // โหลด thumbnail เฉพาะไฟล์รูปภาพ ลดขนาดเพื่อไม่ให้หน่วง/กินแรม
+        loadThumbnailIfImage(it.uri, holder.imgThumb)
+
+        return view
+    }
+
+    private fun loadThumbnailIfImage(uri: Uri, target: ImageView) {
+        // ถ้าไม่ใช่รูปภาพ ก็ไม่บังคับต้องโชว์รูปย่อ (คงภาพเดิมไว้)
+        val type = resolver.getType(uri) ?: return
+        if (!type.startsWith("image/")) return
+
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val src = ImageDecoder.createSource(resolver, uri)
+                val bmp = ImageDecoder.decodeBitmap(src) { decoder, _, _ ->
+                    decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.setTargetSize(160, 160) // เบา ๆ เร็ว
+                }
+                target.setImageBitmap(bmp)
+            } else {
+                // Android < 28 ข้าม (อุปกรณ์คุณคือ Android 15 จึงเข้าทางบนอยู่แล้ว)
+            }
+        } catch (_: Throwable) {
+            // ถ้าอ่านรูปไม่ได้ ไม่ต้อง crash ปล่อยรูปเดิมไว้
+        }
     }
 }

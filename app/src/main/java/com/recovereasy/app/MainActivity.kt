@@ -1,270 +1,325 @@
 package com.recovereasy.app
 
-import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Size
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
 import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
+import java.lang.ref.WeakReference
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
-    private lateinit var progress: ProgressBar
-    private lateinit var btnCancel: Button
-    private lateinit var recycler: RecyclerView
-    private lateinit var spinner: Spinner
-    private lateinit var adapter: MediaAdapter
+    private lateinit var listView: ListView
+    private lateinit var adapter: ItemAdapter
     private lateinit var engine: RecoverEasyEngine
 
-    private var allItems: List<RecoverEasyEngine.Item> = emptyList()
+    private val items = mutableListOf<RecoverEasyEngine.Item>()
+    private val selected = mutableSetOf<Int>()
+    private var selectAllMode = false
+
+    // ยกเลิกงานสแกน/คัดลอกได้
+    @Volatile private var cancelled = false
     private var scanJob: Job? = null
 
-    // permissions
-    private val reqPerms = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* user can tap again if denied */ }
-
-    // copy
-    private var pendingCopy: List<RecoverEasyEngine.Item>? = null
-    private val pickDest = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        val list = pendingCopy
-        pendingCopy = null
-        if (uri == null || list == null) return@registerForActivityResult
-        contentResolver.takePersistableUriPermission(
-            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        )
-        lifecycleScope.launch(Dispatchers.IO) {
-            var ok = 0
-            list.forEach {
-                val out = engine.safeCopyWithDigest(it.uri, uri, it.name)
-                if (out != null) ok++
-            }
-            withContext(Dispatchers.Main) {
-                tvStatus.text = "Copied: $ok / ${list.size}"
-            }
-        }
-    }
-
-    // pick folder
+    // ---------- Activity results ----------
     private val pickFolder = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         uri ?: return@registerForActivityResult
         contentResolver.takePersistableUriPermission(
-            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
-        startScan(kind = "folder", root = uri)
+        startFolderScan(uri)
     }
 
-    // pick Android/media root
-    private val pickMediaRoot = registerForActivityResult(
+    private var pendingCopyIndices: IntArray? = null
+    private val pickDest = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
-        uri ?: return@registerForActivityResult
+        val idx = pendingCopyIndices
+        pendingCopyIndices = null
+        if (uri == null || idx == null) return@registerForActivityResult
         contentResolver.takePersistableUriPermission(
-            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         )
-        startScan(kind = "appcaches", root = uri)
+        doCopySelected(uri, idx)
     }
 
+    // ---------- lifecycle ----------
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        tvStatus = findViewById(R.id.tvStatus)
-        progress = findViewById(R.id.progress)
-        btnCancel = findViewById(R.id.btnCancel)
-        spinner = findViewById(R.id.spinnerFilter)
-        recycler = findViewById(R.id.recycler)
-        recycler.layoutManager = LinearLayoutManager(this)
-        adapter = MediaAdapter(contentResolver)
-        recycler.adapter = adapter
-
         engine = RecoverEasyEngine(this)
+        tvStatus = findViewById(R.id.tvStatus)
+        listView = findViewById(R.id.listResults)
 
-        // filter
-        val choices = arrayOf(
-            "All","Images","Videos","Audio","Documents","Archives","Trashed only","Not trashed"
-        )
-        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, choices)
-        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
-                applyFilter(choices[pos])
-            }
-            override fun onNothingSelected(p0: AdapterView<*>?) {}
+        adapter = ItemAdapter(this, items, selected) { pos ->
+            toggleSelect(pos)
         }
+        listView.adapter = adapter
 
+        // ปุ่มสแกนโทรศัพท์
         findViewById<Button>(R.id.btnScanPhone).setOnClickListener {
-            if (!ensureMediaPermission()) return@setOnClickListener
-            startScan(kind = "phone")
+            doScan(kind = "phone")
         }
+
+        // ปุ่มสแกน SD/OTG
         findViewById<Button>(R.id.btnScanRemovable).setOnClickListener {
-            if (!ensureMediaPermission()) return@setOnClickListener
-            startScan(kind = "removable")
-        }
-        findViewById<Button>(R.id.btnPickFolder).setOnClickListener { pickFolder.launch(null) }
-        findViewById<Button>(R.id.btnScanAppCaches).setOnClickListener { pickMediaRoot.launch(null) }
-        findViewById<Button>(R.id.btnOpenGalleryTrash).setOnClickListener { openSamsungGallery() }
-
-        findViewById<Button>(R.id.btnSelectAll).setOnClickListener { btn ->
-            val select = !adapter.isAllSelected()
-            adapter.setAllSelected(select)
-            (btn as Button).text = if (select) "CLEAR ALL" else "SELECT ALL"
-            tvStatus.text = "Selected ${adapter.selectedItems().size} / ${adapter.itemCount}"
+            doScan(kind = "removable")
         }
 
+        // ปุ่มเลือกโฟลเดอร์
+        findViewById<Button>(R.id.btnPickFolder).setOnClickListener {
+            pickFolder.launch(null)
+        }
+
+        // ปุ่มเลือกทั้งหมด (กดซ้ำ = ยกเลิกทั้งหมด)
+        findViewById<Button>(R.id.btnSelectAll).setOnClickListener {
+            selectAllMode = !selectAllMode
+            if (selectAllMode) {
+                selected.clear()
+                repeat(items.size) { selected += it }
+                tvStatus.text = "Selected ${selected.size}/${items.size}"
+            } else {
+                selected.clear()
+                tvStatus.text = "Selected 0/${items.size}"
+            }
+            adapter.notifyDataSetChanged()
+        }
+
+        // ปุ่มพรีวิว (เปิดดูรายการแรกที่เลือก)
         findViewById<Button>(R.id.btnPreview).setOnClickListener {
-            val first = adapter.selectedItems().firstOrNull()
+            val first = selected.firstOrNull()
             if (first == null) {
                 Toast.makeText(this, "Select an item", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+            val it = items[first]
             val view = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(first.uri, first.mime ?: "*/*")
+                setDataAndType(it.uri, it.mime ?: "*/*")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            try { startActivity(view) }
-            catch (_: ActivityNotFoundException) {
-                Toast.makeText(this, "No app to open", Toast.LENGTH_SHORT).show()
+            try {
+                startActivity(view)
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(this, "No app to open this file", Toast.LENGTH_SHORT).show()
             }
         }
 
+        // ปุ่มคัดลอกที่เลือก
         findViewById<Button>(R.id.btnCopy).setOnClickListener {
-            val sel = adapter.selectedItems()
-            if (sel.isEmpty()) {
-                Toast.makeText(this, "Select items", Toast.LENGTH_SHORT).show()
+            if (selected.isEmpty()) {
+                Toast.makeText(this, "Select items to copy", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            pendingCopy = sel
+            pendingCopyIndices = selected.sorted().toIntArray()
             pickDest.launch(null)
         }
 
-        // cancel scan
-        btnCancel.setOnClickListener { scanJob?.cancel() }
+        // ปุ่ม REPAIR (ยังไม่ทำ – กัน compile error / UI ยังใช้งานได้)
+        findViewById<Button>(R.id.btnRepair)?.setOnClickListener {
+            Toast.makeText(this, "Repair is not implemented yet.", Toast.LENGTH_SHORT).show()
+        }
 
         tvStatus.text = "Ready."
     }
 
-    // ------------------------------------------------------------
-    // Scan orchestrator with progress + cancel
-    // ------------------------------------------------------------
-    private fun startScan(kind: String, root: Uri? = null) {
+    // ---------- scanning ----------
+    private fun doScan(kind: String) {
+        // ยกเลิกงานก่อนหน้า (ถ้ามี)
+        cancelled = true
         scanJob?.cancel()
-        adapter.submitList(emptyList())
-        progress.isIndeterminate = true
-        progress.progress = 0
-        tvStatus.text = "Scanning..."
 
-        scanJob = lifecycleScope.launch(Dispatchers.IO) {
-            var lastPct = -1
-            val items = when (kind) {
-                "phone" -> engine.scanPhoneAll(includeTrash = true,
-                    onProgress = { p, t -> updateProgress(p, t) },
-                    isCancelled = { !isActive })
-                "removable" -> engine.scanRemovableAll(includeTrash = true,
-                    onProgress = { p, t -> updateProgress(p, t) },
-                    isCancelled = { !isActive })
-                "folder" -> engine.scanByFolderAllTypes(root!!,
-                    onProgress = { p, t -> updateProgress(p, t) },
-                    isCancelled = { !isActive })
-                "appcaches" -> engine.scanAppCaches(root!!,
-                    onProgress = { p, t -> updateProgress(p, t) },
-                    isCancelled = { !isActive })
-                else -> emptyList()
-            }
-            withContext(Dispatchers.Main) {
-                allItems = items
-                applyFilter(spinner.selectedItem?.toString() ?: "All")
-                progress.isIndeterminate = false
-                progress.progress = 100
+        cancelled = false
+        items.clear()
+        selected.clear()
+        adapter.notifyDataSetChanged()
+        tvStatus.text = "Preparing scan..."
+
+        scanJob = lifecycleScope.launch(Dispatchers.Main) {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    when (kind) {
+                        "phone" -> engine.scanPhoneAll(
+                            includeTrash = true,
+                            onProgress = { done, total ->
+                                updateProgress(done, total, prefix = "Scanning phone")
+                            },
+                            isCancelled = { cancelled }
+                        )
+                        "removable" -> engine.scanRemovableAll(
+                            includeTrash = true,
+                            onProgress = { done, total ->
+                                updateProgress(done, total, prefix = "Scanning SD/OTG")
+                            },
+                            isCancelled = { cancelled }
+                        )
+                        else -> emptyList()
+                    }
+                }
+                items.clear()
+                items.addAll(result)
                 tvStatus.text = "Found: ${items.size} items"
+                adapter.notifyDataSetChanged()
+            } catch (t: CancellationException) {
+                tvStatus.text = "Scan cancelled."
+            } catch (t: Throwable) {
+                tvStatus.text = "Scan error: ${t.message ?: t.javaClass.simpleName}"
             }
-        }.also { job ->
-            job.invokeOnCompletion { e ->
-                runOnUiThread {
-                    if (e is CancellationException) {
-                        adapter.submitList(emptyList())
-                        tvStatus.text = "Canceled."
-                        progress.isIndeterminate = false
-                        progress.progress = 0
+        }
+    }
+
+    private fun startFolderScan(uri: Uri) {
+        cancelled = true
+        scanJob?.cancel()
+
+        cancelled = false
+        items.clear()
+        selected.clear()
+        adapter.notifyDataSetChanged()
+        tvStatus.text = "Scanning folder..."
+
+        scanJob = lifecycleScope.launch(Dispatchers.Main) {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    engine.scanByFolderAllTypes(
+                        tree = uri,
+                        onProgress = { done, total ->
+                            updateProgress(done, total, prefix = "Scanning folder")
+                        },
+                        isCancelled = { cancelled }
+                    )
+                }
+                items.clear()
+                items.addAll(result)
+                tvStatus.text = "Found: ${items.size} items"
+                adapter.notifyDataSetChanged()
+            } catch (t: CancellationException) {
+                tvStatus.text = "Scan cancelled."
+            } catch (t: Throwable) {
+                tvStatus.text = "Scan error: ${t.message ?: t.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun updateProgress(done: Int, total: Int, prefix: String) {
+        val pct = if (total <= 0) 0 else (done * 100 / total)
+        runOnUiThread {
+            tvStatus.text = "$prefix... $pct% ($done/$total)"
+        }
+    }
+
+    // ---------- copy ----------
+    private fun doCopySelected(destTree: Uri, indices: IntArray) {
+        lifecycleScope.launch(Dispatchers.Main) {
+            var ok = 0
+            var fail = 0
+            tvStatus.text = "Copying ${indices.size} items..."
+            withContext(Dispatchers.IO) {
+                for ((i, idx) in indices.withIndex()) {
+                    val it = items.getOrNull(idx) ?: continue
+                    try {
+                        val newUri = engine.safeCopyWithDigest(it.uri, destTree, it.name)
+                        if (newUri != null) ok++ else fail++
+                    } catch (_: Throwable) {
+                        fail++
+                    }
+                    val pct = (i + 1) * 100 / indices.size
+                    runOnUiThread { tvStatus.text = "Copying... $pct% ($ok ok, $fail fail)" }
+                }
+            }
+            tvStatus.text = "Copied: $ok / ${indices.size} (fail $fail)"
+        }
+    }
+
+    // ---------- selection helpers ----------
+    private fun toggleSelect(position: Int) {
+        if (selected.contains(position)) selected.remove(position) else selected.add(position)
+        tvStatus.text = "Selected ${selected.size}/${items.size}"
+    }
+
+    // ---------- Adapter (thumbnail + checkbox) ----------
+    private class ItemAdapter(
+        activity: MainActivity,
+        private val data: List<RecoverEasyEngine.Item>,
+        private val selected: Set<Int>,
+        private val onRowClick: (Int) -> Unit
+    ) : BaseAdapter() {
+
+        private val actRef = WeakReference(activity)
+        private val scope = activity.lifecycleScope
+        private val inflater = LayoutInflater.from(activity)
+
+        override fun getCount(): Int = data.size
+        override fun getItem(position: Int): Any = data[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val v: View
+            val h: VH
+            if (convertView == null) {
+                v = inflater.inflate(R.layout.row_item_thumb, parent, false)
+                h = VH(
+                    v.findViewById(R.id.imgThumb),
+                    v.findViewById(R.id.txtName),
+                    v.findViewById(R.id.chk)
+                )
+                v.tag = h
+            } else {
+                v = convertView
+                h = v.tag as VH
+            }
+
+            val item = data[position]
+            h.txt.text = (if (item.isTrashed) "[TRASH] " else "") + item.name
+            h.chk.isChecked = selected.contains(position)
+
+            v.setOnClickListener { onRowClick(position); h.chk.isChecked = !h.chk.isChecked }
+            h.chk.setOnClickListener { onRowClick(position) }
+
+            // โหลดรูปตัวอย่างแบบเบา ๆ
+            h.img.setImageDrawable(null)
+            val act = actRef.get()
+            if (act != null) {
+                scope.launch(Dispatchers.IO) {
+                    val bmp = try {
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            act.contentResolver.loadThumbnail(item.uri, Size(128, 128), null)
+                        } else {
+                            // fallback (ไม่ค่อยได้ใช้บน S25)
+                            act.contentResolver.openInputStream(item.uri)?.use {
+                                android.graphics.BitmapFactory.decodeStream(it)
+                            }
+                        }
+                    } catch (_: Throwable) { null }
+
+                    withContext(Dispatchers.Main) {
+                        if (act.isFinishing || act.isDestroyed) return@withContext
+                        if (bmp != null) h.img.setImageBitmap(bmp) else h.img.setImageResource(android.R.color.transparent)
                     }
                 }
             }
-        }
-    }
 
-    private fun updateProgress(processed: Int, total: Int) {
-        val pct = (processed * 100 / total.coerceAtLeast(1)).coerceIn(0, 100)
-        runOnUiThread {
-            progress.isIndeterminate = false
-            progress.progress = pct
-            tvStatus.text = "Scanning… $processed / $total ($pct%)"
+            return v
         }
-    }
 
-    // ------------------------------------------------------------
-    // Filters
-    // ------------------------------------------------------------
-    private fun applyFilter(choice: String) {
-        val filtered = when (choice) {
-            "Images" -> allItems.filter { it.mime?.startsWith("image/") == true }
-            "Videos" -> allItems.filter { it.mime?.startsWith("video/") == true }
-            "Audio" -> allItems.filter { it.mime?.startsWith("audio/") == true }
-            "Documents" -> allItems.filter {
-                val m = it.mime ?: ""
-                (m.startsWith("application/") || m.startsWith("text/")) &&
-                        !m.contains("zip") && !m.contains("rar") && !m.contains("7z")
-            }
-            "Archives" -> allItems.filter {
-                val n = it.name.lowercase()
-                val m = it.mime?.lowercase() ?: ""
-                n.endsWith(".zip") || n.endsWith(".rar") || n.endsWith(".7z")
-                        || n.endsWith(".tar") || n.endsWith(".gz")
-                        || m.contains("zip") || m.contains("x-rar") || m.contains("x-7z")
-            }
-            "Trashed only" -> allItems.filter { it.isTrashed }
-            "Not trashed" -> allItems.filter { !it.isTrashed }
-            else -> allItems
-        }
-        adapter.submitList(filtered)
-        adapter.clearSelection()
-        findViewById<Button>(R.id.btnSelectAll).text = "SELECT ALL"
-        tvStatus.text = "Showing ${filtered.size} / ${allItems.size}"
-    }
-
-    // ------------------------------------------------------------
-    // Permissions & helpers
-    // ------------------------------------------------------------
-    private fun ensureMediaPermission(): Boolean {
-        if (Build.VERSION.SDK_INT < 33) return true
-        val perms = arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.READ_MEDIA_VIDEO,
-            Manifest.permission.READ_MEDIA_AUDIO
+        private data class VH(
+            val img: ImageView,
+            val txt: TextView,
+            val chk: CheckBox
         )
-        val need = perms.any { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
-        if (need) reqPerms.launch(perms)
-        return !need
-    }
-
-    private fun openSamsungGallery() {
-        try {
-            // พยายามเปิดแอปแกลเลอรีซัมซุง
-            val launch = packageManager.getLaunchIntentForPackage("com.sec.android.gallery3d")
-            if (launch != null) startActivity(launch)
-            else Toast.makeText(this, "Samsung Gallery not found", Toast.LENGTH_SHORT).show()
-        } catch (_: Throwable) {
-            Toast.makeText(this, "Unable to open Gallery", Toast.LENGTH_SHORT).show()
-        }
     }
 }
